@@ -149,6 +149,8 @@ kombu==5.6.2
     # via celery
 limits==5.8.0
     # via slowapi
+lxml==6.0.2
+    # via python-docx
 mako==1.3.10
     # via alembic
 markdown-it-py==4.0.0
@@ -194,6 +196,8 @@ protobuf==5.29.6
     #   googleapis-common-protos
     #   grpcio-status
     #   proto-plus
+psycopg2-binary==2.9.11
+    # via smart-talent-engine (pyproject.toml)
 pyasn1==0.6.3
     # via pyasn1-modules
 pyasn1-modules==0.4.2
@@ -223,6 +227,8 @@ pyiceberg==0.11.1
     # via storage3
 pyjwt==2.12.1
     # via supabase-auth
+pymupdf==1.27.2.2
+    # via smart-talent-engine (pyproject.toml)
 pyparsing==3.3.2
     # via
     #   httplib2
@@ -233,6 +239,8 @@ python-dateutil==2.9.0.post0
     # via
     #   celery
     #   strictyaml
+python-docx==1.2.0
+    # via smart-talent-engine (pyproject.toml)
 python-dotenv==1.2.2
     # via
     #   pydantic-settings
@@ -293,7 +301,6 @@ tqdm==4.67.3
 typing-extensions==4.15.0
     # via
     #   alembic
-    #   anyio
     #   azure-ai-documentintelligence
     #   azure-core
     #   fastapi
@@ -304,9 +311,9 @@ typing-extensions==4.15.0
     #   openai
     #   pydantic
     #   pydantic-core
+    #   python-docx
     #   realtime
     #   sqlalchemy
-    #   starlette
     #   typing-inspection
 typing-inspection==0.4.2
     # via
