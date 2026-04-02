@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from uuid import uuid4
 
@@ -114,10 +115,14 @@ async def upload_resume_files(
 
             # Enqueue parsing task (Celery)
             try:
+                # Derive a deterministic task ID from the file key.
+                # If the same file_key is enqueued twice, Celery deduplicates on task_id.
+                idempotency_key = hashlib.sha256(file_key.encode()).hexdigest()[:32]
+
                 celery_app.send_task(
                     "app.workers.tasks.parse_resume.parse_resume_task",
                     args=[str(resume_upload.id), file_key],
-                    queue="default",
+                    task_id=idempotency_key,
                 )
                 # Update status to queued
                 resume_upload.status = UploadStatus.queued
