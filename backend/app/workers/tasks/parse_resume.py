@@ -20,6 +20,7 @@ from app.core.config import settings
 from app.core.exceptions import ParsingError
 from app.db.sync_session import get_sync_session
 from app.models.resume_upload import ResumeUpload, UploadStatus
+from app.services.parsing.regex_extractor import extract_deterministic_fields
 from app.services.parsing.text_extractor import extract_and_normalise
 from app.services.storage import get_supabase_client
 from app.workers.celery_app import celery_app
@@ -129,17 +130,25 @@ def parse_resume_task(self, resume_upload_id: str, file_key: str) -> None:
             char_count=len(extracted_text),
         )
 
-        # TODO (Tasks 3.2–3.7): Pass extracted_text to the rest of the pipeline
-        # For now, log the result and keep status as 'parsing'
+        # Step 4: Deterministic field extraction (Task 3.2)
+        logger.info("regex_extraction_started")
+        regex_result = extract_deterministic_fields(extracted_text)
+        logger.info(
+            "regex_extraction_finished",
+            **regex_result.to_dict(),
+        )
+
+        # TODO (Tasks 3.3–3.7): Pass extracted_text + regex_result to the AI pipeline
+        # For now, log results and keep status as 'parsing'
         # until the full pipeline is wired up
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
         logger.info(
-            "parsing_task_extraction_complete",
+            "parsing_task_pipeline_complete",
             duration_ms=duration_ms,
             extracted_chars=len(extracted_text),
             text_preview=extracted_text[:1000] + "..." if len(extracted_text) > 1000 else extracted_text,
-            message="Text extracted — awaiting Phase 3 Tasks 3.2-3.7 for full profile building",
+            regex_fields=regex_result.to_dict(),
         )
 
     except ParsingError as exc:
