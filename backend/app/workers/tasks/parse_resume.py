@@ -20,6 +20,7 @@ from app.core.config import settings
 from app.core.exceptions import ParsingError
 from app.db.sync_session import get_sync_session
 from app.models.resume_upload import ResumeUpload, UploadStatus
+from app.services.parsing.ner_extractor import extract_entities
 from app.services.parsing.regex_extractor import extract_deterministic_fields
 from app.services.parsing.text_extractor import extract_and_normalise
 from app.services.storage import get_supabase_client
@@ -138,7 +139,15 @@ def parse_resume_task(self, resume_upload_id: str, file_key: str) -> None:
             **regex_result.to_dict(),
         )
 
-        # TODO (Tasks 3.3–3.7): Pass extracted_text + regex_result to the AI pipeline
+        # Step 5: Named Entity Recognition (Task 3.3)
+        logger.info("ner_extraction_started")
+        ner_result = extract_entities(extracted_text)
+        logger.info(
+            "ner_extraction_finished",
+            **ner_result.to_dict(),
+        )
+
+        # TODO (Tasks 3.4–3.7): Pass extracted_text + regex_result + ner_result to LLM
         # For now, log results and keep status as 'parsing'
         # until the full pipeline is wired up
 
@@ -149,6 +158,7 @@ def parse_resume_task(self, resume_upload_id: str, file_key: str) -> None:
             extracted_chars=len(extracted_text),
             text_preview=extracted_text[:1000] + "..." if len(extracted_text) > 1000 else extracted_text,
             regex_fields=regex_result.to_dict(),
+            ner_entities=ner_result.to_dict(),
         )
 
     except ParsingError as exc:
