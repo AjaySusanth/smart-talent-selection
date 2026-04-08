@@ -3,15 +3,18 @@ Resume parsing Celery task.
 
 Enqueued by the upload service after a resume is stored in Supabase.
 
-Pipeline stages (current):
+Pipeline stages:
   1. Download file from Supabase Storage
   2. Detect MIME type
+  2.5. Extract hyperlinks from DOCX/PDF structure (before text extraction)
   3. Extract and normalise text (Azure DI → fallback)
   4. Deterministic field extraction (regex)
   5. NER via HuggingFace Inference API
-  6. LLM structured extraction (Gemini 2.5 Flash)
+    6. LLM structured extraction (Groq llama-3.3-70b-versatile)
+     - Post-processing: regex overlay, hyperlink overlay, issuer normalisation
+    7. Skill normalisation (deterministic aliases + Groq fallback)
 
-TODO (Tasks 3.5–3.7): Skill normalisation, DB persistence, embedding.
+TODO (Tasks 3.6–3.7): DB persistence, embedding.
 """
 
 from __future__ import annotations
@@ -28,8 +31,10 @@ from app.core.exceptions import ParsingError
 from app.db.sync_session import get_sync_session
 from app.models.resume_upload import ResumeUpload, UploadStatus
 from app.services.parsing.gemini_extractor import extract_structured_profile
+from app.services.parsing.hyperlink_extractor import extract_hyperlinks
 from app.services.parsing.ner_extractor import extract_entities
 from app.services.parsing.regex_extractor import extract_deterministic_fields
+from app.services.parsing.skill_normaliser import normalise_skills
 from app.services.parsing.text_extractor import extract_and_normalise
 from app.services.storage import get_supabase_client
 from app.workers.celery_app import celery_app
@@ -118,6 +123,23 @@ def parse_resume_task(self, resume_upload_id: str, file_key: str) -> None:
         # Step 2: Detect MIME type from the actual bytes
         mime_type = _mime_detector.from_buffer(file_bytes)
 
+        # Step 2.5: Extract hyperlinks from file structure (before text extraction)
+        # This reads the real href values from DOCX XML rels / PDF annotations.
+        # Must run BEFORE Azure DI because DI only returns display text.
+        logger.info("hyperlink_extraction_started")
+        hyperlinks = extract_hyperlinks(file_bytes, mime_type)
+        logger.info(
+            "hyperlink_extraction_finished",
+            total_hrefs=len(hyperlinks.get("raw_hrefs", [])),
+            has_linkedin=hyperlinks.get("linkedin_url") is not None,
+            has_github=hyperlinks.get("github_url") is not None,
+            project_url_count=len(hyperlinks.get("project_urls", [])),
+            linkedin_url=hyperlinks.get("linkedin_url"),
+            github_url=hyperlinks.get("github_url"),
+            project_urls=hyperlinks.get("project_urls", []),
+            raw_hrefs=hyperlinks.get("raw_hrefs", []),
+        )
+
         # Step 3: Extract and normalise text
         logger.info("text_extraction_started")
         extracted_text = extract_and_normalise(file_bytes, mime_type)
@@ -143,13 +165,15 @@ def parse_resume_task(self, resume_upload_id: str, file_key: str) -> None:
         )
 
         # Step 6: LLM Structured Extraction (Task 3.4)
-        # Gemini receives text + regex hints + NER hints.
-        # Post-processing overlays regex data on top of Gemini output.
+        # Groq receives text + regex + NER hints.
+        # Post-processing overlays regex data, then hyperlinks (highest priority),
+        # then resolves missing certification issuers.
         logger.info("gemini_extraction_started")
         candidate_profile = extract_structured_profile(
             text=extracted_text,
             regex_hints=regex_result,
             ner_hints=ner_result,
+            hyperlinks=hyperlinks,
         )
         logger.info(
             "gemini_extraction_finished",
@@ -157,12 +181,11 @@ def parse_resume_task(self, resume_upload_id: str, file_key: str) -> None:
             skills_count=len(candidate_profile.skills),
             experience_count=len(candidate_profile.experience),
             education_count=len(candidate_profile.education),
-            certifications_count=len(candidate_profile.certifications),
-            projects_count=len(candidate_profile.projects),
             total_exp_years=candidate_profile.total_experience_years,
         )
 
-        # TODO (Tasks 3.5–3.7): Skill normalisation, DB persistence, embedding
+        # Step 7: Skill Normalisation (Task 3.5)
+        candidate_profile.normalised_skills = normalise_skills(candidate_profile.skills)
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
         logger.info(
@@ -181,7 +204,7 @@ def parse_resume_task(self, resume_upload_id: str, file_key: str) -> None:
             duration_ms=duration_ms,
         )
         if settings.environment == "development":
-            # In dev, don't retry to save on DI limits and time
+            # In dev, don't retry to save on DI limits/time
             raise exc
 
         retry_count = self.request.retries
@@ -195,9 +218,8 @@ def parse_resume_task(self, resume_upload_id: str, file_key: str) -> None:
             exc=str(exc),
             duration_ms=duration_ms,
         )
-
         if settings.environment == "development":
-            # In dev, don't retry to save on DI limits and time
+            # In dev, don't retry to save on DI limits/time
             raise exc
 
         retry_count = self.request.retries

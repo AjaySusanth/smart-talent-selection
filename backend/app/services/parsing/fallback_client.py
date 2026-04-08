@@ -140,7 +140,7 @@ def extract_text_docx(file_bytes: bytes) -> str:
 
         logger.info(
             "fallback_docx_extraction_complete",
-            paragraphs_extracted=len(paragraphs),
+            blocks_extracted=len(parts),
             char_count=len(full_text),
         )
 

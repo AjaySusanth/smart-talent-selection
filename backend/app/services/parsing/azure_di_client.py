@@ -181,6 +181,12 @@ def extract_text(file_bytes: bytes, mime_type: str) -> str:
         # Build text from paragraphs in reading order (Watchout 3 & 7)
         extracted_text = _extract_ordered_text(result)
 
+        logger.info(
+            "azure_di_extracted_text_preview",
+            extracted_char_count=len(extracted_text),
+            extracted_preview=extracted_text[:1200],
+        )
+
         # Check for suspiciously short extraction (Watchout 5)
         if len(extracted_text.strip()) < _MIN_EXTRACTION_LENGTH:
             logger.warning(

@@ -11,6 +11,8 @@ The schema is intentionally flat and explicit so the LLM can follow it reliably.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -71,6 +73,15 @@ class Project(BaseModel):
     github_url: str | None = Field(default=None, description="GitHub repository URL if mentioned")
 
 
+class NormalisedSkill(BaseModel):
+    """Canonical skill entry used by downstream matching and scoring."""
+
+    name: str = Field(description="Canonical skill name")
+    category: Literal[
+        "language", "framework", "database", "tool", "cloud", "soft_skill"
+    ] = Field(description="Skill category")
+
+
 class CandidateProfile(BaseModel):
     """
     The complete structured profile extracted from a resume.
@@ -97,6 +108,10 @@ class CandidateProfile(BaseModel):
     skills: list[str] = Field(
         default_factory=list,
         description="All technical and soft skills mentioned, each as a separate item",
+    )
+    normalised_skills: list[NormalisedSkill] = Field(
+        default_factory=list,
+        description="Deduplicated canonical skills with categories",
     )
     languages: list[str] = Field(
         default_factory=list,

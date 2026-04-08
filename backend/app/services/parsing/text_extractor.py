@@ -74,12 +74,19 @@ def extract_and_normalise(file_bytes: bytes, mime_type: str) -> str:
             raise
 
     # Step 3: Normalise
+    logger.info(
+        "text_extraction_raw_preview",
+        raw_chars=len(raw_text),
+        raw_preview=raw_text[:1200],
+    )
+
     normalised = normalise(raw_text)
 
     logger.info(
         "text_extraction_complete",
         raw_chars=len(raw_text),
         normalised_chars=len(normalised),
+        normalised_preview=normalised[:1200],
     )
 
     return normalised
