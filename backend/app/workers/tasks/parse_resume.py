@@ -2,9 +2,16 @@
 Resume parsing Celery task.
 
 Enqueued by the upload service after a resume is stored in Supabase.
-Currently implements: file download → text extraction → status update.
-Phase 3 Tasks 3.2–3.7 will add LLM extraction, NER, skill normalisation,
-summary generation, and embedding.
+
+Pipeline stages (current):
+  1. Download file from Supabase Storage
+  2. Detect MIME type
+  3. Extract and normalise text (Azure DI → fallback)
+  4. Deterministic field extraction (regex)
+  5. NER via HuggingFace Inference API
+  6. LLM structured extraction (Gemini 2.5 Flash)
+
+TODO (Tasks 3.5–3.7): Skill normalisation, DB persistence, embedding.
 """
 
 from __future__ import annotations
@@ -20,6 +27,7 @@ from app.core.config import settings
 from app.core.exceptions import ParsingError
 from app.db.sync_session import get_sync_session
 from app.models.resume_upload import ResumeUpload, UploadStatus
+from app.services.parsing.gemini_extractor import extract_structured_profile
 from app.services.parsing.ner_extractor import extract_entities
 from app.services.parsing.regex_extractor import extract_deterministic_fields
 from app.services.parsing.text_extractor import extract_and_normalise
@@ -86,20 +94,7 @@ class ParseResumeTask(Task):
 def parse_resume_task(self, resume_upload_id: str, file_key: str) -> None:
     """
     Main entry point for the resume parsing pipeline.
-
-    Current implementation (Task 3.1):
-        1. Download file from Supabase Storage
-        2. Extract and normalise text (Azure DI → fallback)
-        3. Update status in DB
-
-    TODO (Tasks 3.2–3.7):
-        4. Deterministic field extraction (regex)
-        5. NER via HuggingFace
-        6. LLM structured extraction (Gemini Flash)
-        7. Skill normalisation (Groq 8B)
-        8. Summary generation (Groq 70B)
-        9. Embedding generation (OpenAI)
-        10. Store candidate profile in DB
+    See module docstring for the full stage list.
     """
     # Bind context for structured log tracing
     structlog.contextvars.bind_contextvars(
@@ -147,18 +142,34 @@ def parse_resume_task(self, resume_upload_id: str, file_key: str) -> None:
             **ner_result.to_dict(),
         )
 
-        # TODO (Tasks 3.4–3.7): Pass extracted_text + regex_result + ner_result to LLM
-        # For now, log results and keep status as 'parsing'
-        # until the full pipeline is wired up
+        # Step 6: LLM Structured Extraction (Task 3.4)
+        # Gemini receives text + regex hints + NER hints.
+        # Post-processing overlays regex data on top of Gemini output.
+        logger.info("gemini_extraction_started")
+        candidate_profile = extract_structured_profile(
+            text=extracted_text,
+            regex_hints=regex_result,
+            ner_hints=ner_result,
+        )
+        logger.info(
+            "gemini_extraction_finished",
+            full_name=candidate_profile.full_name,
+            skills_count=len(candidate_profile.skills),
+            experience_count=len(candidate_profile.experience),
+            education_count=len(candidate_profile.education),
+            certifications_count=len(candidate_profile.certifications),
+            projects_count=len(candidate_profile.projects),
+            total_exp_years=candidate_profile.total_experience_years,
+        )
+
+        # TODO (Tasks 3.5–3.7): Skill normalisation, DB persistence, embedding
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
         logger.info(
             "parsing_task_pipeline_complete",
             duration_ms=duration_ms,
             extracted_chars=len(extracted_text),
-            text_preview=extracted_text[:1000] + "..." if len(extracted_text) > 1000 else extracted_text,
-            regex_fields=regex_result.to_dict(),
-            ner_entities=ner_result.to_dict(),
+            profile_json=candidate_profile.model_dump(),
         )
 
     except ParsingError as exc:
@@ -169,6 +180,10 @@ def parse_resume_task(self, resume_upload_id: str, file_key: str) -> None:
             exc=str(exc),
             duration_ms=duration_ms,
         )
+        if settings.environment == "development":
+            # In dev, don't retry to save on DI limits and time
+            raise exc
+
         retry_count = self.request.retries
         countdown = self.default_retry_delay ** (retry_count + 1)
         raise self.retry(exc=exc, countdown=countdown)
@@ -180,6 +195,11 @@ def parse_resume_task(self, resume_upload_id: str, file_key: str) -> None:
             exc=str(exc),
             duration_ms=duration_ms,
         )
+
+        if settings.environment == "development":
+            # In dev, don't retry to save on DI limits and time
+            raise exc
+
         retry_count = self.request.retries
         countdown = self.default_retry_delay ** (retry_count + 1)
         raise self.retry(exc=exc, countdown=countdown)
