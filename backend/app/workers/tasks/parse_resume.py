@@ -2,9 +2,21 @@
 Resume parsing Celery task.
 
 Enqueued by the upload service after a resume is stored in Supabase.
-Currently implements: file download → text extraction → status update.
-Phase 3 Tasks 3.2–3.7 will add LLM extraction, NER, skill normalisation,
-summary generation, and embedding.
+
+Pipeline stages:
+  1. Download file from Supabase Storage
+  2. Detect MIME type
+  2.5. Extract hyperlinks from DOCX/PDF structure (before text extraction)
+  3. Extract and normalise text (Azure DI → fallback)
+  4. Deterministic field extraction (regex)
+  5. NER via HuggingFace Inference API
+    6. LLM structured extraction (Groq llama-3.3-70b-versatile)
+     - Post-processing: regex overlay, hyperlink overlay, issuer normalisation
+    7. Skill normalisation (deterministic aliases + Groq fallback)
+    8. Embedding generation (structured text + Azure OpenAI vector)
+    9. Candidate persistence (candidate row + upload status parsed)
+
+TODO: Task 4+ ranking and scoring pipeline.
 """
 
 from __future__ import annotations
@@ -20,6 +32,14 @@ from app.core.config import settings
 from app.core.exceptions import ParsingError
 from app.db.sync_session import get_sync_session
 from app.models.resume_upload import ResumeUpload, UploadStatus
+from app.services.parsing.candidate_persister import persist_candidate
+from app.services.parsing.embedding_builder import build_embedding_text
+from app.services.parsing.embedding_generator import generate_embedding
+from app.services.parsing.gemini_extractor import extract_structured_profile
+from app.services.parsing.hyperlink_extractor import extract_hyperlinks
+from app.services.parsing.ner_extractor import extract_entities
+from app.services.parsing.regex_extractor import extract_deterministic_fields
+from app.services.parsing.skill_normaliser import normalise_skills
 from app.services.parsing.text_extractor import extract_and_normalise
 from app.services.storage import get_supabase_client
 from app.workers.celery_app import celery_app
@@ -84,20 +104,7 @@ class ParseResumeTask(Task):
 def parse_resume_task(self, resume_upload_id: str, file_key: str) -> None:
     """
     Main entry point for the resume parsing pipeline.
-
-    Current implementation (Task 3.1):
-        1. Download file from Supabase Storage
-        2. Extract and normalise text (Azure DI → fallback)
-        3. Update status in DB
-
-    TODO (Tasks 3.2–3.7):
-        4. Deterministic field extraction (regex)
-        5. NER via HuggingFace
-        6. LLM structured extraction (Gemini Flash)
-        7. Skill normalisation (Groq 8B)
-        8. Summary generation (Groq 70B)
-        9. Embedding generation (OpenAI)
-        10. Store candidate profile in DB
+    See module docstring for the full stage list.
     """
     # Bind context for structured log tracing
     structlog.contextvars.bind_contextvars(
@@ -121,6 +128,23 @@ def parse_resume_task(self, resume_upload_id: str, file_key: str) -> None:
         # Step 2: Detect MIME type from the actual bytes
         mime_type = _mime_detector.from_buffer(file_bytes)
 
+        # Step 2.5: Extract hyperlinks from file structure (before text extraction)
+        # This reads the real href values from DOCX XML rels / PDF annotations.
+        # Must run BEFORE Azure DI because DI only returns display text.
+        logger.info("hyperlink_extraction_started")
+        hyperlinks = extract_hyperlinks(file_bytes, mime_type)
+        logger.info(
+            "hyperlink_extraction_finished",
+            total_hrefs=len(hyperlinks.get("raw_hrefs", [])),
+            has_linkedin=hyperlinks.get("linkedin_url") is not None,
+            has_github=hyperlinks.get("github_url") is not None,
+            project_url_count=len(hyperlinks.get("project_urls", [])),
+            linkedin_url=hyperlinks.get("linkedin_url"),
+            github_url=hyperlinks.get("github_url"),
+            project_urls=hyperlinks.get("project_urls", []),
+            raw_hrefs=hyperlinks.get("raw_hrefs", []),
+        )
+
         # Step 3: Extract and normalise text
         logger.info("text_extraction_started")
         extracted_text = extract_and_normalise(file_bytes, mime_type)
@@ -129,17 +153,72 @@ def parse_resume_task(self, resume_upload_id: str, file_key: str) -> None:
             char_count=len(extracted_text),
         )
 
-        # TODO (Tasks 3.2–3.7): Pass extracted_text to the rest of the pipeline
-        # For now, log the result and keep status as 'parsing'
-        # until the full pipeline is wired up
+        # Step 4: Deterministic field extraction (Task 3.2)
+        logger.info("regex_extraction_started")
+        regex_result = extract_deterministic_fields(extracted_text)
+        logger.info(
+            "regex_extraction_finished",
+            **regex_result.to_dict(),
+        )
+
+        # Step 5: Named Entity Recognition (Task 3.3)
+        logger.info("ner_extraction_started")
+        ner_result = extract_entities(extracted_text)
+        logger.info(
+            "ner_extraction_finished",
+            **ner_result.to_dict(),
+        )
+
+        # Step 6: LLM Structured Extraction (Task 3.4)
+        # Groq receives text + regex + NER hints.
+        # Post-processing overlays regex data, then hyperlinks (highest priority),
+        # then resolves missing certification issuers.
+        logger.info("gemini_extraction_started")
+        candidate_profile = extract_structured_profile(
+            text=extracted_text,
+            regex_hints=regex_result,
+            ner_hints=ner_result,
+            hyperlinks=hyperlinks,
+        )
+        logger.info(
+            "gemini_extraction_finished",
+            full_name=candidate_profile.full_name,
+            skills_count=len(candidate_profile.skills),
+            experience_count=len(candidate_profile.experience),
+            education_count=len(candidate_profile.education),
+            total_exp_years=candidate_profile.total_experience_years,
+        )
+
+        # Step 7: Skill Normalisation (Task 3.5)
+        candidate_profile.normalised_skills = normalise_skills(candidate_profile.skills)
+
+        # Step 8: Embedding Generation (Task 3.7)
+        embedding_text = build_embedding_text(candidate_profile)
+        embedding_vector = generate_embedding(embedding_text)
+
+        # Step 9: Candidate Persistence (Task 3.6)
+        session = get_sync_session()
+        try:
+            candidate = persist_candidate(
+                session=session,
+                resume_upload_id=resume_upload_id,
+                raw_text=extracted_text,
+                profile=candidate_profile,
+                embedding_text=embedding_text,
+                embedding_vector=embedding_vector,
+            )
+        finally:
+            session.close()
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
         logger.info(
-            "parsing_task_extraction_complete",
+            "parsing_task_pipeline_complete",
             duration_ms=duration_ms,
             extracted_chars=len(extracted_text),
-            text_preview=extracted_text[:1000] + "..." if len(extracted_text) > 1000 else extracted_text,
-            message="Text extracted — awaiting Phase 3 Tasks 3.2-3.7 for full profile building",
+            embedding_chars=len(embedding_text),
+            embedding_dims=len(embedding_vector),
+            candidate_id=str(candidate.id),
+            profile_json=candidate_profile.model_dump(),
         )
 
     except ParsingError as exc:
@@ -150,6 +229,10 @@ def parse_resume_task(self, resume_upload_id: str, file_key: str) -> None:
             exc=str(exc),
             duration_ms=duration_ms,
         )
+        if settings.environment == "development":
+            # In dev, don't retry to save on DI limits/time
+            raise exc
+
         retry_count = self.request.retries
         countdown = self.default_retry_delay ** (retry_count + 1)
         raise self.retry(exc=exc, countdown=countdown)
@@ -161,6 +244,10 @@ def parse_resume_task(self, resume_upload_id: str, file_key: str) -> None:
             exc=str(exc),
             duration_ms=duration_ms,
         )
+        if settings.environment == "development":
+            # In dev, don't retry to save on DI limits/time
+            raise exc
+
         retry_count = self.request.retries
         countdown = self.default_retry_delay ** (retry_count + 1)
         raise self.retry(exc=exc, countdown=countdown)
