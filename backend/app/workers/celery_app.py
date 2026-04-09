@@ -15,6 +15,7 @@ celery_app.conf.task_reject_on_worker_lost = True
 # Explicitly include task modules so Celery registers them on startup
 celery_app.conf.include = [
     "app.workers.tasks.parse_resume",
+    "app.workers.tasks.ranking",
 ]
 
 # Azure DI F0 tier: limit to 1 concurrent task to avoid burst throttle (Watchout 1)

@@ -541,6 +541,9 @@ def normalise_skills(raw_skills: list[str]) -> list[NormalisedSkill]:
         llm_resolved=len(llm_resolved),
         final_count=len(final),
         unresolved_count=max(len(unresolved) - len(llm_resolved), 0),
+        normalised_skills=[
+            {"name": skill.name, "category": skill.category} for skill in final
+        ],
     )
 
     return final
