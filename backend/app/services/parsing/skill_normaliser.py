@@ -29,6 +29,7 @@ _ALLOWED_CATEGORIES = {
     "tool",
     "cloud",
     "soft_skill",
+    "stack",
 }
 
 _MODEL_NAME = "llama-3.3-70b-versatile"
@@ -144,6 +145,8 @@ SKILL_ALIASES: dict[str, str] = {
     "metabase": "Metabase",
     "microservices": "Microservices",
     "ml": "Machine Learning",
+    "mern": "MERN",
+    "mean": "MEAN",
     "mongodb": "MongoDB",
     "mongo": "MongoDB",
     "ms excel": "Microsoft Excel",
@@ -297,13 +300,15 @@ SKILL_CATEGORIES: dict[str, str] = {
     "Kanban": "tool",
     "Keras": "framework",
     "Kotlin": "language",
-    "Kubernetes": "cloud",
+    "Kubernetes": "tool",
     "LangChain": "tool",
     "Leadership": "soft_skill",
     "Linux": "tool",
     "LLM": "tool",
     "Machine Learning": "tool",
     "MATLAB": "language",
+    "MEAN": "stack",
+    "MERN": "stack",
     "Maven": "tool",
     "Metabase": "tool",
     "Microservices": "tool",

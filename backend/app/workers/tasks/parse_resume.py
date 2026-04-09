@@ -13,8 +13,10 @@ Pipeline stages:
     6. LLM structured extraction (Groq llama-3.3-70b-versatile)
      - Post-processing: regex overlay, hyperlink overlay, issuer normalisation
     7. Skill normalisation (deterministic aliases + Groq fallback)
+    8. Embedding generation (structured text + Azure OpenAI vector)
+    9. Candidate persistence (candidate row + upload status parsed)
 
-TODO (Tasks 3.6–3.7): DB persistence, embedding.
+TODO: Task 4+ ranking and scoring pipeline.
 """
 
 from __future__ import annotations
@@ -30,6 +32,9 @@ from app.core.config import settings
 from app.core.exceptions import ParsingError
 from app.db.sync_session import get_sync_session
 from app.models.resume_upload import ResumeUpload, UploadStatus
+from app.services.parsing.candidate_persister import persist_candidate
+from app.services.parsing.embedding_builder import build_embedding_text
+from app.services.parsing.embedding_generator import generate_embedding
 from app.services.parsing.gemini_extractor import extract_structured_profile
 from app.services.parsing.hyperlink_extractor import extract_hyperlinks
 from app.services.parsing.ner_extractor import extract_entities
@@ -187,11 +192,32 @@ def parse_resume_task(self, resume_upload_id: str, file_key: str) -> None:
         # Step 7: Skill Normalisation (Task 3.5)
         candidate_profile.normalised_skills = normalise_skills(candidate_profile.skills)
 
+        # Step 8: Embedding Generation (Task 3.7)
+        embedding_text = build_embedding_text(candidate_profile)
+        embedding_vector = generate_embedding(embedding_text)
+
+        # Step 9: Candidate Persistence (Task 3.6)
+        session = get_sync_session()
+        try:
+            candidate = persist_candidate(
+                session=session,
+                resume_upload_id=resume_upload_id,
+                raw_text=extracted_text,
+                profile=candidate_profile,
+                embedding_text=embedding_text,
+                embedding_vector=embedding_vector,
+            )
+        finally:
+            session.close()
+
         duration_ms = int((time.monotonic() - start_time) * 1000)
         logger.info(
             "parsing_task_pipeline_complete",
             duration_ms=duration_ms,
             extracted_chars=len(extracted_text),
+            embedding_chars=len(embedding_text),
+            embedding_dims=len(embedding_vector),
+            candidate_id=str(candidate.id),
             profile_json=candidate_profile.model_dump(),
         )
 

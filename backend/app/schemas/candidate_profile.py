@@ -78,7 +78,7 @@ class NormalisedSkill(BaseModel):
 
     name: str = Field(description="Canonical skill name")
     category: Literal[
-        "language", "framework", "database", "tool", "cloud", "soft_skill"
+        "language", "framework", "database", "tool", "cloud", "soft_skill", "stack"
     ] = Field(description="Skill category")
 
 
