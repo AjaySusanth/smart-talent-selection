@@ -73,6 +73,7 @@ class CandidateRankingResult(BaseModel):
     resume_upload_id: UUID
     total_exp_years: float
     breakdown: CandidateRankingBreakdown
+    justification_text: str | None = None
 
 
 class JobDescriptionRankingResponse(BaseModel):

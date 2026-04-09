@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from uuid import UUID
 
 import structlog
@@ -240,6 +241,29 @@ LIMIT :limit;
 """
 )
 
+_UPSERT_JOB_MATCH_SQL = text(
+    """
+INSERT INTO job_matches (
+    id, jd_id, candidate_id,
+    semantic_score, rule_score, final_score,
+    score_breakdown_json, ranked_at
+)
+VALUES (
+    uuid_generate_v4(), :jd_id, :candidate_id,
+    :semantic_score, :rule_score, :final_score,
+    CAST(:score_breakdown_json AS jsonb), NOW()
+)
+ON CONFLICT (jd_id, candidate_id)
+DO UPDATE SET
+    semantic_score = EXCLUDED.semantic_score,
+    rule_score = EXCLUDED.rule_score,
+    final_score = EXCLUDED.final_score,
+    score_breakdown_json = EXCLUDED.score_breakdown_json,
+    ranked_at = NOW()
+RETURNING id;
+"""
+)
+
 
 async def get_top_candidates(
     session: AsyncSession,
@@ -267,27 +291,99 @@ async def get_top_candidates(
     total_candidates = 0
     for row in result.mappings():
         total_candidates = int(row["total_candidates"] or 0)
+        breakdown = {
+            "semantic_score": float(row["semantic_score"] or 0),
+            "rule_score": float(row["rule_score"] or 0),
+            "final_score": float(row["final_score"] or 0),
+            "skill_score": float(row["skill_score"] or 0),
+            "exp_score": float(row["exp_score"] or 0),
+            "projects_score": float(row["projects_score"] or 0),
+            "professional_score": float(row["professional_score"] or 0),
+            "certs_score": float(row["certs_score"] or 0),
+            "matching_mandatory_skills": int(row["matching_mandatory_skills"] or 0),
+            "total_mandatory_skills": int(row["total_mandatory_skills"] or 0),
+        }
         rows.append(
             {
                 "candidate_id": row["candidate_id"],
                 "resume_upload_id": row["resume_upload_id"],
                 "total_exp_years": float(row["total_exp_years"] or 0),
-                "breakdown": {
-                    "semantic_score": float(row["semantic_score"] or 0),
-                    "rule_score": float(row["rule_score"] or 0),
-                    "final_score": float(row["final_score"] or 0),
-                    "skill_score": float(row["skill_score"] or 0),
-                    "exp_score": float(row["exp_score"] or 0),
-                    "projects_score": float(row["projects_score"] or 0),
-                    "professional_score": float(row["professional_score"] or 0),
-                    "certs_score": float(row["certs_score"] or 0),
-                    "matching_mandatory_skills": int(
-                        row["matching_mandatory_skills"] or 0
-                    ),
-                    "total_mandatory_skills": int(row["total_mandatory_skills"] or 0),
-                },
+                "breakdown": breakdown,
             }
         )
+
+    # ── Persist results to job_matches ────────────────────────────────
+    for item in rows:
+        try:
+            await session.execute(
+                _UPSERT_JOB_MATCH_SQL,
+                {
+                    "jd_id": str(jd_id),
+                    "candidate_id": str(item["candidate_id"]),
+                    "semantic_score": item["breakdown"]["semantic_score"],
+                    "rule_score": item["breakdown"]["rule_score"],
+                    "final_score": item["breakdown"]["final_score"],
+                    "score_breakdown_json": json.dumps(item["breakdown"]),
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "job_match_upsert_failed",
+                candidate_id=str(item["candidate_id"]),
+                exc=str(exc),
+            )
+
+    try:
+        await session.commit()
+    except Exception as exc:
+        await session.rollback()
+        logger.error("job_match_commit_failed", exc=str(exc))
+
+    # ── Enqueue justification tasks for top 5 ─────────────────────────
+    from app.workers.tasks.ranking import generate_justification_task
+
+    top_5 = rows[:5]
+    for item in top_5:
+        try:
+            # Task itself handles Redis caching and DB updates
+            generate_justification_task.delay(str(jd_id), str(item["candidate_id"]))
+            logger.info(
+                "justification_task_enqueued",
+                candidate_id=str(item["candidate_id"]),
+            )
+        except Exception as exc:
+            logger.warning(
+                "justification_task_enqueue_failed",
+                candidate_id=str(item["candidate_id"]),
+                exc=str(exc),
+            )
+
+    # ── Fetch existing justifications for the response ────────────────
+    candidate_ids = [str(r["candidate_id"]) for r in rows]
+    if candidate_ids:
+        justification_result = await session.execute(
+            text(
+                """
+                SELECT candidate_id, justification_text
+                FROM job_matches
+                WHERE jd_id = :jd_id AND candidate_id = ANY(CAST(:candidate_ids AS uuid[]))
+                AND justification_text IS NOT NULL
+            """
+            ),
+            {"jd_id": str(jd_id), "candidate_ids": candidate_ids},
+        )
+        justification_map = {
+            str(row["candidate_id"]): row["justification_text"]
+            for row in justification_result.mappings()
+        }
+
+        for item in rows:
+            item["justification_text"] = justification_map.get(
+                str(item["candidate_id"])
+            )
+    else:
+        for item in rows:
+            item["justification_text"] = None
 
     logger.info(
         "jd_ranking_computed",
@@ -295,6 +391,8 @@ async def get_top_candidates(
         returned_candidates=len(rows),
         total_candidates=total_candidates,
         limit=safe_limit,
+        matches_persisted=len(rows),
+        justifications_enqueued=len(top_5),
     )
 
     return rows, total_candidates
