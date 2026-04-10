@@ -14,7 +14,7 @@ from app.schemas.job_role import JobRoleCreate, JobRoleUpdate, JobRoleResponse
 from app.schemas.job_description import JDRequirements, JobDescriptionRead
 from app.schemas.scoring_config import ScoringConfigResponse, ScoringConfigUpdate
 from app.services.job_role_service import create_job_role, list_job_roles
-from app.services.jd.manager import list_job_descriptions_for_role
+from app.services.jd.manager import get_job_description_for_role
 from app.services.scoring_config_service import (
     get_scoring_config,
     reset_scoring_config,
@@ -62,25 +62,26 @@ async def list_job_roles_endpoint(
     ]
 
 
-@router.get("/{id}/jds", response_model=list[JobDescriptionRead])
-async def list_jds_for_role_endpoint(
+@router.get("/{id}/jd", response_model=JobDescriptionRead | None)
+async def get_jd_for_role_endpoint(
     id: UUID,
     db: Annotated[AsyncSession, Depends(get_db_session)],
     _: Annotated[None, Depends(require_api_key)],
-) -> list[JobDescriptionRead]:
-    jds = await list_job_descriptions_for_role(db, id)
-    return [
-        JobDescriptionRead(
-            id=jd.id,
-            job_role_id=jd.job_role_id,
-            raw_text=jd.raw_text,
-            requirements=JDRequirements.model_validate(jd.requirements_json),
-            is_active=jd.is_active,
-            created_at=jd.created_at,
-            status="ready" if jd.embedding is not None else "pending",
-        )
-        for jd in jds
-    ]
+) -> JobDescriptionRead | None:
+    """Return the single active JD for this role, or null."""
+    jd = await get_job_description_for_role(db, id)
+    if jd is None:
+        return None
+    return JobDescriptionRead(
+        id=jd.id,
+        job_role_id=jd.job_role_id,
+        raw_text=jd.raw_text,
+        requirements=JDRequirements.model_validate(jd.requirements_json),
+        is_active=jd.is_active,
+        created_at=jd.created_at,
+        status="ready" if jd.embedding is not None else "pending",
+    )
+
 
 
 @router.get("/{id}/scoring-config", response_model=ScoringConfigResponse)

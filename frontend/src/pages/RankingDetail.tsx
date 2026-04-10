@@ -497,8 +497,7 @@ export const RankingDetail = () => {
   const { id: roleId } = useParams<{ id: string }>();
 
   const [role, setRole] = useState<JobRole | null>(null);
-  const [jds, setJds] = useState<JobDescription[]>([]);
-  const [selectedJdId, setSelectedJdId] = useState<string | null>(null);
+  const [jd, setJd] = useState<JobDescription | null>(null);
   const [ranking, setRanking] = useState<JobDescriptionRankingResponse | null>(
     null,
   );
@@ -535,18 +534,17 @@ export const RankingDetail = () => {
       setLoading(true);
       setError(null);
       try {
-        const [rolesRes, jdsRes] = await Promise.all([
+        const [rolesRes, jdRes] = await Promise.all([
           api.get<JobRole[]>("/job-roles"),
-          api.get<JobDescription[]>(`/job-roles/${roleId}/jds`),
+          api.get<JobDescription | null>(`/job-roles/${roleId}/jd`),
         ]);
 
         const currentRole = rolesRes.data.find((r) => r.id === roleId) || null;
         setRole(currentRole);
-        setJds(jdsRes.data);
 
-        if (jdsRes.data.length > 0) {
-          setSelectedJdId(jdsRes.data[0].id);
-          setJdDraft(jdsRes.data[0].raw_text);
+        if (jdRes.data) {
+          setJd(jdRes.data);
+          setJdDraft(jdRes.data.raw_text);
         }
 
         try {
@@ -596,8 +594,8 @@ export const RankingDetail = () => {
   );
 
   useEffect(() => {
-    if (selectedJdId) fetchRanking(selectedJdId);
-  }, [selectedJdId, fetchRanking]);
+    if (jd?.id) fetchRanking(jd.id);
+  }, [jd?.id, fetchRanking]);
 
   useEffect(() => {
     pollStartRef.current = Date.now();
@@ -606,10 +604,10 @@ export const RankingDetail = () => {
       window.clearTimeout(pollTimerRef.current);
       pollTimerRef.current = null;
     }
-  }, [selectedJdId]);
+  }, [jd?.id]);
 
   useEffect(() => {
-    if (!selectedJdId || !ranking || ranking.candidates.length === 0) {
+    if (!jd?.id || !ranking || ranking.candidates.length === 0) {
       setJustificationPolling(false);
       return;
     }
@@ -635,7 +633,7 @@ export const RankingDetail = () => {
     }
 
     pollTimerRef.current = window.setTimeout(() => {
-      fetchRanking(selectedJdId, { silent: true });
+      fetchRanking(jd.id, { silent: true });
     }, 5000);
 
     return () => {
@@ -644,15 +642,13 @@ export const RankingDetail = () => {
         pollTimerRef.current = null;
       }
     };
-  }, [ranking, selectedJdId, fetchRanking]);
+  }, [ranking, jd?.id, fetchRanking]);
 
   useEffect(() => {
-    if (!selectedJdId) return;
-    const selected = jds.find((jd) => jd.id === selectedJdId);
-    if (selected) {
-      setJdDraft(selected.raw_text);
+    if (jd) {
+      setJdDraft(jd.raw_text);
     }
-  }, [selectedJdId, jds]);
+  }, [jd]);
 
   const handleApplyWeights = async () => {
     if (!roleId) return;
@@ -675,7 +671,7 @@ export const RankingDetail = () => {
         weights,
       );
       setScoringConfig(res.data);
-      if (selectedJdId) await fetchRanking(selectedJdId);
+      if (jd?.id) await fetchRanking(jd.id);
     } catch (err: any) {
       alert(err.response?.data?.detail || "Failed to update weights.");
     } finally {
@@ -709,11 +705,7 @@ export const RankingDetail = () => {
         raw_text: jdDraft.trim(),
       });
 
-      const jdsRes = await api.get<JobDescription[]>(
-        `/job-roles/${roleId}/jds`,
-      );
-      setJds(jdsRes.data);
-      setSelectedJdId(createRes.data.id);
+      setJd(createRes.data);
       setEditingJd(false);
     } catch (err: any) {
       alert(err.response?.data?.detail || "Failed to save JD.");
@@ -733,8 +725,8 @@ export const RankingDetail = () => {
 
     try {
       await deleteCandidate(candidateId);
-      if (selectedJdId) {
-        await fetchRanking(selectedJdId);
+      if (jd?.id) {
+        await fetchRanking(jd.id);
       }
     } catch (err: any) {
       alert(err.response?.data?.detail || "Failed to delete candidate.");
@@ -820,83 +812,78 @@ export const RankingDetail = () => {
         </div>
       </div>
 
-      {jds.length > 0 && (
-        <div className="space-y-3">
-          <div className="flex items-center gap-4">
-            <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
-              Job Description
-            </label>
-            <select
-              value={selectedJdId || ""}
-              onChange={(e) => {
-                setSelectedJdId(e.target.value);
-                setEditingJd(false);
-              }}
-              className="bg-white/5 border border-border rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all flex-1 max-w-md appearance-none cursor-pointer"
-            >
-              {jds.map((jd) => (
-                <option key={jd.id} value={jd.id} className="bg-slate-900">
-                  {jd.raw_text.substring(0, 60)}... ({jd.status})
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className="text-xs px-3 py-2 rounded-md border border-white/10 hover:bg-white/10"
-              onClick={() => {
-                setJdDraft("");
-                setEditingJd(true);
-              }}
-            >
-              Create JD
-            </button>
-          </div>
+      {/* Job Description Section */}
+      <div className="space-y-3">
+        <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+          Job Description
+        </label>
 
-          {!editingJd ? (
+        {!editingJd ? (
+          jd ? (
             <div className="rounded-xl border border-white/10 bg-white/5 p-4 flex items-start justify-between gap-3">
               <p className="text-sm text-muted-foreground line-clamp-2">
-                {jdDraft.slice(0, 200)}
-                {jdDraft.length > 200 ? "..." : ""}
+                {jd.raw_text.slice(0, 200)}
+                {jd.raw_text.length > 200 ? "..." : ""}
               </p>
               <button
                 type="button"
-                className="text-xs px-3 py-1.5 rounded-md border border-white/10 hover:bg-white/10"
-                onClick={() => setEditingJd(true)}
+                className="text-xs px-3 py-1.5 rounded-md border border-white/10 hover:bg-white/10 shrink-0"
+                onClick={() => {
+                  setJdDraft(jd.raw_text);
+                  setEditingJd(true);
+                }}
               >
                 Edit JD
               </button>
             </div>
           ) : (
-            <div className="rounded-xl border border-white/10 bg-white/5 p-4 space-y-3">
-              <textarea
-                value={jdDraft}
-                onChange={(e) => setJdDraft(e.target.value)}
-                rows={8}
-                minLength={100}
-                className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-y"
-                placeholder="Paste the full job description here..."
-              />
-              <div className="flex items-center gap-2 justify-end">
-                <button
-                  type="button"
-                  className="px-3 py-2 text-sm rounded-md border border-white/10 hover:bg-white/10"
-                  onClick={() => setEditingJd(false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="px-3 py-2 text-sm rounded-md bg-primary text-primary-foreground disabled:opacity-50"
-                  onClick={handleSaveJd}
-                  disabled={savingJd || jdDraft.trim().length < 100}
-                >
-                  {savingJd ? "Saving..." : "Save JD"}
-                </button>
-              </div>
+            <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-6 flex flex-col items-center gap-3">
+              <FolderOpen className="w-6 h-6 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground text-center">
+                No job description yet. Add one to start ranking candidates.
+              </p>
+              <button
+                type="button"
+                className="text-xs px-4 py-2 rounded-md bg-primary text-primary-foreground"
+                onClick={() => {
+                  setJdDraft("");
+                  setEditingJd(true);
+                }}
+              >
+                Add Job Description
+              </button>
             </div>
-          )}
-        </div>
-      )}
+          )
+        ) : (
+          <div className="rounded-xl border border-white/10 bg-white/5 p-4 space-y-3">
+            <textarea
+              value={jdDraft}
+              onChange={(e) => setJdDraft(e.target.value)}
+              rows={8}
+              minLength={100}
+              className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-y"
+              placeholder="Paste the full job description here..."
+            />
+            <div className="flex items-center gap-2 justify-end">
+              <button
+                type="button"
+                className="px-3 py-2 text-sm rounded-md border border-white/10 hover:bg-white/10"
+                onClick={() => setEditingJd(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="px-3 py-2 text-sm rounded-md bg-primary text-primary-foreground disabled:opacity-50"
+                onClick={handleSaveJd}
+                disabled={savingJd || jdDraft.trim().length < 100}
+              >
+                {savingJd ? "Saving..." : jd ? "Update JD" : "Save JD"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
 
       {showConfig && (
         <div className="glass-card rounded-3xl p-6 border border-primary/30">
@@ -965,37 +952,8 @@ export const RankingDetail = () => {
         </div>
       )}
 
-      {jds.length === 0 && (
-        <div className="glass-card rounded-3xl p-6 border border-white/10 space-y-4">
-          <div className="flex items-center gap-2">
-            <FolderOpen className="w-5 h-5 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">
-              No job descriptions found yet. Create one to start ranking
-              candidates.
-            </p>
-          </div>
-          <textarea
-            value={jdDraft}
-            onChange={(e) => setJdDraft(e.target.value)}
-            rows={8}
-            minLength={100}
-            className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-y"
-            placeholder="Paste the full job description here..."
-          />
-          <div className="flex justify-end">
-            <button
-              type="button"
-              className="px-3 py-2 text-sm rounded-md bg-primary text-primary-foreground disabled:opacity-50"
-              onClick={handleSaveJd}
-              disabled={savingJd || jdDraft.trim().length < 100}
-            >
-              {savingJd ? "Saving..." : "Create JD"}
-            </button>
-          </div>
-        </div>
-      )}
 
-      {jds.length > 0 && (
+      {jd && (
         <div className="glass-card rounded-3xl overflow-hidden shadow-2xl">
           <div className="bg-white/5 px-8 py-4 flex justify-between items-center border-b border-white/5 font-bold text-xs text-muted-foreground uppercase tracking-widest">
             <span>Candidate Match Pipeline</span>
@@ -1005,7 +963,7 @@ export const RankingDetail = () => {
                   type="button"
                   className="text-[11px] normal-case inline-flex items-center gap-1 px-2 py-1 rounded border border-white/10 hover:bg-white/10"
                   onClick={() =>
-                    selectedJdId && fetchRanking(selectedJdId, { silent: true })
+                    jd?.id && fetchRanking(jd.id, { silent: true })
                   }
                 >
                   <RefreshCw className="w-3 h-3" />

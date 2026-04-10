@@ -51,6 +51,22 @@ async def create_job_description(
 
     # Issue #6: Transactional integrity with explicit rollback
     try:
+        # Enforce 1:1: deactivate any existing JDs for this role
+        existing_jds = await session.execute(
+            select(JobDescription).where(
+                JobDescription.job_role_id == payload.job_role_id,
+                JobDescription.is_active == True,  # noqa: E712
+            )
+        )
+        for old_jd in existing_jds.scalars().all():
+            old_jd.is_active = False
+            logger.info(
+                "job_description_deactivated",
+                old_jd_id=str(old_jd.id),
+                job_role_id=str(payload.job_role_id),
+                reason="replaced_by_new_jd",
+            )
+
         jd = JobDescription(
             job_role_id=payload.job_role_id,
             raw_text=payload.raw_text,
@@ -79,16 +95,21 @@ async def create_job_description(
         raise
 
 
-async def list_job_descriptions_for_role(
+async def get_job_description_for_role(
     session: AsyncSession,
     job_role_id,
-) -> list[JobDescription]:
+) -> JobDescription | None:
+    """Return the single active JD for a role, or None."""
     result = await session.execute(
         select(JobDescription)
-        .where(JobDescription.job_role_id == job_role_id)
+        .where(
+            JobDescription.job_role_id == job_role_id,
+            JobDescription.is_active == True,  # noqa: E712
+        )
         .order_by(JobDescription.created_at.desc())
+        .limit(1)
     )
-    return list(result.scalars().all())
+    return result.scalar_one_or_none()
 
 
 async def get_job_description(
@@ -99,3 +120,4 @@ async def get_job_description(
         select(JobDescription).where(JobDescription.id == jd_id)
     )
     return result.scalar_one_or_none()
+
