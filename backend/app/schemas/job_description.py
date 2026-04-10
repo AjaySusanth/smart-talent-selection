@@ -56,6 +56,7 @@ class JobDescriptionRead(BaseModel):
 class CandidateRankingBreakdown(BaseModel):
     semantic_score: float
     rule_score: float
+    raw_rule_score: float = 0.0
     final_score: float
 
     skill_score: float
@@ -63,6 +64,10 @@ class CandidateRankingBreakdown(BaseModel):
     projects_score: float
     professional_score: float
     certs_score: float
+    mandatory_ratio: float = 0.0
+    gate_multiplier: float = 1.0
+    relevant_experience_months: float = 0.0
+    relevant_professional_months: float = 0.0
 
     matching_mandatory_skills: int
     total_mandatory_skills: int

@@ -49,6 +49,71 @@ requirements AS (
                 COALESCE(jd.requirements_json -> 'certifications', '[]'::jsonb)
             )
         )::text[] AS certifications,
+        ARRAY[
+            'a','an','the','and','or','to','of','for','in','on','at','by','with','from',
+            'as','is','are','was','were','be','been','being','this','that','these','those',
+            'it','its','into','over','under','across','within','about','after','before',
+            'during','through','using','used','work','worked','working','role','roles',
+            'team','teams','project','projects','experience','years','year','responsible',
+            'responsibilities','developed','managed','support','supporting','analysis'
+        ]::text[] AS stop_tokens,
+        ARRAY(
+            SELECT DISTINCT token
+            FROM (
+                SELECT value
+                FROM jsonb_array_elements_text(
+                    COALESCE(jd.requirements_json -> 'mandatory_skills', '[]'::jsonb)
+                )
+                UNION ALL
+                SELECT value
+                FROM jsonb_array_elements_text(
+                    COALESCE(jd.requirements_json -> 'preferred_skills', '[]'::jsonb)
+                )
+            ) src
+            CROSS JOIN LATERAL regexp_split_to_table(
+                lower(src.value),
+                '[^a-z0-9#+]+'
+            ) AS token
+            WHERE token <> ''
+            AND char_length(token) >= 2
+        )::text[] AS skill_anchor_tokens,
+        ARRAY(
+            SELECT DISTINCT token
+            FROM (
+                SELECT COALESCE(jd.requirements_json ->> 'domain', '') AS chunk
+                UNION ALL
+                SELECT value
+                FROM jsonb_array_elements_text(
+                    COALESCE(jd.requirements_json -> 'responsibilities', '[]'::jsonb)
+                )
+                UNION ALL
+                SELECT value
+                FROM jsonb_array_elements_text(
+                    COALESCE(jd.requirements_json -> 'mandatory_skills', '[]'::jsonb)
+                )
+                UNION ALL
+                SELECT value
+                FROM jsonb_array_elements_text(
+                    COALESCE(jd.requirements_json -> 'preferred_skills', '[]'::jsonb)
+                )
+            ) src
+            CROSS JOIN LATERAL regexp_split_to_table(
+                lower(src.chunk),
+                '[^a-z0-9#+]+'
+            ) AS token
+            WHERE token <> ''
+            AND char_length(token) >= 2
+            AND token <> ALL(
+                ARRAY[
+                    'a','an','the','and','or','to','of','for','in','on','at','by','with','from',
+                    'as','is','are','was','were','be','been','being','this','that','these','those',
+                    'it','its','into','over','under','across','within','about','after','before',
+                    'during','through','using','used','work','worked','working','role','roles',
+                    'team','teams','project','projects','experience','years','year','responsible',
+                    'responsibilities','developed','managed','support','supporting','analysis'
+                ]::text[]
+            )
+        )::text[] AS domain_tokens,
         COALESCE(
             NULLIF(jd.requirements_json ->> 'min_experience_years', '')::numeric,
             NULLIF(jd.requirements_json ->> 'min_years_experience', '')::numeric,
@@ -61,6 +126,8 @@ scored AS (
         c.id AS candidate_id,
         c.resume_upload_id,
         c.total_exp_years::numeric AS total_exp_years,
+        COALESCE(rel.relevant_months, 0::numeric) AS relevant_experience_months,
+        COALESCE(prof.relevant_professional_months, 0::numeric) AS relevant_professional_months,
         CASE
             WHEN c.embedding IS NULL OR jd.embedding IS NULL THEN 0::numeric
             ELSE 100::numeric * (1::numeric - (c.embedding <=> jd.embedding)::numeric)
@@ -69,88 +136,61 @@ scored AS (
         CASE
             WHEN cardinality(req.mandatory_skills) = 0 THEN 100::numeric
             ELSE (
-                (
-                    SELECT COUNT(DISTINCT lower(cs.skill_name))::numeric
-                    FROM candidate_skills cs
-                    WHERE cs.candidate_id = c.id
-                    AND lower(cs.skill_name) = ANY(req.mandatory_skills)
-                )
+                skill_stats.matching_mandatory_skills::numeric
                 / cardinality(req.mandatory_skills)::numeric
             ) * 100::numeric
         END AS skill_score,
 
         CASE
-            WHEN req.min_experience_years <= 0 THEN 100::numeric
-            WHEN c.total_exp_years::numeric >= req.min_experience_years THEN 100::numeric
-            ELSE GREATEST(
-                0::numeric,
-                (c.total_exp_years::numeric / req.min_experience_years) * 100::numeric * 0.9::numeric
-            )
-        END AS exp_score,
-
-        -- Projects score: 50% project count (capped at 3) + 50% tech relevance
-        CASE
-            WHEN (
-                SELECT COUNT(*)
-                FROM candidate_experience ce
-                WHERE ce.candidate_id = c.id AND ce.exp_type = 'project'
-            ) = 0 THEN 0::numeric
-            ELSE LEAST(100::numeric, (
-                -- Count component: up to 50 pts for having 3+ projects
-                LEAST(50::numeric,
-                    (SELECT COUNT(*)::numeric FROM candidate_experience ce
-                     WHERE ce.candidate_id = c.id AND ce.exp_type = 'project')
-                    * 50.0 / 3.0
-                )
-                +
-                -- Relevance component: up to 50 pts for tech overlap with JD skills
-                CASE
-                    WHEN cardinality(req.mandatory_skills || req.preferred_skills) = 0
-                        THEN 50::numeric
-                    ELSE LEAST(50::numeric,
-                        COALESCE((
-                            SELECT COUNT(DISTINCT lower(tech.value))::numeric
-                                * 50.0
-                                / GREATEST(1, cardinality(req.mandatory_skills || req.preferred_skills))::numeric
-                            FROM jsonb_array_elements(
-                                COALESCE(c.profile_json -> 'projects', '[]'::jsonb)
-                            ) proj,
-                            jsonb_array_elements_text(
-                                COALESCE(proj -> 'technologies', '[]'::jsonb)
-                            ) tech
-                            WHERE lower(tech.value) = ANY(
-                                req.mandatory_skills || req.preferred_skills
-                            )
-                        ), 0::numeric)
-                    )
-                END
-            ))
-        END AS projects_score,
-
-        CASE
-            WHEN req.min_experience_years <= 0 THEN
-                CASE
-                    WHEN EXISTS (
-                        SELECT 1
-                        FROM candidate_experience ce
-                        WHERE ce.candidate_id = c.id
-                        AND ce.exp_type = 'professional'
-                    ) THEN 100::numeric
-                    ELSE 0::numeric
-                END
+            WHEN cardinality(req.mandatory_skills) > 0
+                 AND COALESCE(skill_stats.matching_mandatory_skills, 0) < 2 THEN 0::numeric
+            WHEN COALESCE(rel.relevant_months, 0::numeric) <= 0::numeric THEN 0::numeric
             ELSE LEAST(
                 100::numeric,
                 (
-                    COALESCE(
-                        (
-                            SELECT SUM(ce.duration_months)::numeric
-                            FROM candidate_experience ce
-                            WHERE ce.candidate_id = c.id
-                            AND ce.exp_type = 'professional'
-                        ),
-                        0::numeric
+                    COALESCE(rel.relevant_months, 0::numeric)
+                    / (GREATEST(req.min_experience_years, 1::numeric) * 12::numeric)
+                ) * 100::numeric
+            )
+        END AS exp_score,
+
+        -- Projects score: pure tech overlap (no count bonus)
+        CASE
+            WHEN COALESCE(proj_stats.project_count, 0) = 0 THEN 0::numeric
+            WHEN cardinality(req.mandatory_skills) = 0
+                 AND cardinality(req.preferred_skills) = 0 THEN 100::numeric
+            ELSE LEAST(
+                100::numeric,
+                (
+                    (
+                        0.7::numeric
+                        * (
+                            COALESCE(proj_stats.required_overlap_count, 0::numeric)
+                            / GREATEST(cardinality(req.mandatory_skills), 1)::numeric
+                        )
                     )
-                    / (req.min_experience_years * 12::numeric)
+                    +
+                    (
+                        0.3::numeric
+                        * (
+                            COALESCE(proj_stats.preferred_overlap_count, 0::numeric)
+                            / GREATEST(cardinality(req.preferred_skills), 1)::numeric
+                        )
+                    )
+                )
+                * 100::numeric
+            )
+        END AS projects_score,
+
+        CASE
+            WHEN cardinality(req.mandatory_skills) > 0
+                 AND COALESCE(skill_stats.matching_mandatory_skills, 0) < 2 THEN 0::numeric
+            WHEN COALESCE(prof.relevant_professional_months, 0::numeric) <= 0::numeric THEN 0::numeric
+            ELSE LEAST(
+                100::numeric,
+                (
+                    COALESCE(prof.relevant_professional_months, 0::numeric)
+                    / (GREATEST(req.min_experience_years, 1::numeric) * 12::numeric)
                 ) * 100::numeric
             )
         END AS professional_score,
@@ -174,31 +214,167 @@ scored AS (
         END AS certs_score,
 
         cardinality(req.mandatory_skills) AS total_mandatory_skills,
-        (
-            SELECT COUNT(DISTINCT lower(cs.skill_name))::int
-            FROM candidate_skills cs
-            WHERE cs.candidate_id = c.id
-            AND lower(cs.skill_name) = ANY(req.mandatory_skills)
-        ) AS matching_mandatory_skills
+        skill_stats.matching_mandatory_skills
     FROM candidates c
     JOIN resume_uploads ru
         ON ru.id = c.resume_upload_id
     CROSS JOIN jd
     CROSS JOIN requirements req
+    LEFT JOIN LATERAL (
+        SELECT COUNT(DISTINCT lower(cs.skill_name))::int AS matching_mandatory_skills
+        FROM candidate_skills cs
+        WHERE cs.candidate_id = c.id
+        AND lower(cs.skill_name) = ANY(req.mandatory_skills)
+    ) skill_stats ON TRUE
+    LEFT JOIN LATERAL (
+        SELECT COALESCE(SUM(COALESCE(ce.duration_months, 0)), 0)::numeric AS relevant_months
+        FROM candidate_experience ce
+        WHERE ce.candidate_id = c.id
+        AND ce.exp_type <> 'project'
+        AND (
+            SELECT COUNT(DISTINCT token)
+            FROM regexp_split_to_table(
+                lower(
+                    concat_ws(
+                        ' ',
+                        COALESCE(ce.role, ''),
+                        COALESCE(ce.description, ''),
+                        COALESCE(ce.company, '')
+                    )
+                ),
+                '[^a-z0-9#+]+'
+            ) AS token
+            WHERE token <> ''
+            AND char_length(token) >= 2
+            AND token <> ALL(req.stop_tokens)
+            AND token = ANY(req.mandatory_skills)
+        ) >= CASE
+            WHEN cardinality(req.mandatory_skills) > 0 THEN 2
+            ELSE 1
+        END
+        AND (
+            SELECT COUNT(DISTINCT token)
+            FROM regexp_split_to_table(
+                lower(
+                    concat_ws(
+                        ' ',
+                        COALESCE(ce.role, ''),
+                        COALESCE(ce.description, ''),
+                        COALESCE(ce.company, '')
+                    )
+                ),
+                '[^a-z0-9#+]+'
+            ) AS token
+            WHERE token <> ''
+            AND char_length(token) >= 2
+            AND token <> ALL(req.stop_tokens)
+            AND token = ANY(req.domain_tokens)
+        ) >= CASE
+            WHEN cardinality(req.mandatory_skills) >= 4 THEN 3
+            ELSE 2
+        END
+    ) rel ON TRUE
+    LEFT JOIN LATERAL (
+        SELECT COALESCE(SUM(COALESCE(ce.duration_months, 0)), 0)::numeric AS relevant_professional_months
+        FROM candidate_experience ce
+        WHERE ce.candidate_id = c.id
+        AND ce.exp_type = 'professional'
+        AND (
+            SELECT COUNT(DISTINCT token)
+            FROM regexp_split_to_table(
+                lower(
+                    concat_ws(
+                        ' ',
+                        COALESCE(ce.role, ''),
+                        COALESCE(ce.description, ''),
+                        COALESCE(ce.company, '')
+                    )
+                ),
+                '[^a-z0-9#+]+'
+            ) AS token
+            WHERE token <> ''
+            AND char_length(token) >= 2
+            AND token <> ALL(req.stop_tokens)
+            AND token = ANY(req.mandatory_skills)
+        ) >= CASE
+            WHEN cardinality(req.mandatory_skills) > 0 THEN 2
+            ELSE 1
+        END
+        AND (
+            SELECT COUNT(DISTINCT token)
+            FROM regexp_split_to_table(
+                lower(
+                    concat_ws(
+                        ' ',
+                        COALESCE(ce.role, ''),
+                        COALESCE(ce.description, ''),
+                        COALESCE(ce.company, '')
+                    )
+                ),
+                '[^a-z0-9#+]+'
+            ) AS token
+            WHERE token <> ''
+            AND char_length(token) >= 2
+            AND token <> ALL(req.stop_tokens)
+            AND token = ANY(req.domain_tokens)
+        ) >= CASE
+            WHEN cardinality(req.mandatory_skills) >= 4 THEN 3
+            ELSE 2
+        END
+    ) prof ON TRUE
+    LEFT JOIN LATERAL (
+        SELECT
+            (
+                SELECT COUNT(*)::int
+                FROM jsonb_array_elements(COALESCE(c.profile_json -> 'projects', '[]'::jsonb))
+            ) AS project_count,
+            COALESCE(
+                (
+                    SELECT COUNT(DISTINCT lower(tech.value))::numeric
+                    FROM jsonb_array_elements(
+                        COALESCE(c.profile_json -> 'projects', '[]'::jsonb)
+                    ) proj
+                    CROSS JOIN LATERAL jsonb_array_elements_text(
+                        COALESCE(proj -> 'technologies', '[]'::jsonb)
+                    ) AS tech(value)
+                    WHERE lower(tech.value) = ANY(req.mandatory_skills)
+                ),
+                0::numeric
+            ) AS required_overlap_count,
+            COALESCE(
+                (
+                    SELECT COUNT(DISTINCT lower(tech.value))::numeric
+                    FROM jsonb_array_elements(
+                        COALESCE(c.profile_json -> 'projects', '[]'::jsonb)
+                    ) proj
+                    CROSS JOIN LATERAL jsonb_array_elements_text(
+                        COALESCE(proj -> 'technologies', '[]'::jsonb)
+                    ) AS tech(value)
+                    WHERE lower(tech.value) = ANY(req.preferred_skills)
+                ),
+                0::numeric
+            ) AS preferred_overlap_count
+    ) proj_stats ON TRUE
     WHERE ru.job_role_id = jd.job_role_id
 ),
 with_scores AS (
     SELECT
         scored.*,
+        CASE
+            WHEN scored.total_mandatory_skills = 0 THEN 1::numeric
+            ELSE (
+                scored.matching_mandatory_skills::numeric
+                / scored.total_mandatory_skills::numeric
+            )
+        END AS mandatory_ratio,
         (
             (
                 (config.skill_w * scored.skill_score)
-                + (config.exp_w * scored.exp_score)
+                + ((config.exp_w + config.prof_w) * scored.professional_score)
                 + (config.project_w * scored.projects_score)
-                + (config.prof_w * scored.professional_score)
                 + (config.cert_w * scored.certs_score)
             ) / 100::numeric
-        ) AS rule_score
+        ) AS raw_rule_score
     FROM scored
     CROSS JOIN config
 ),
@@ -207,6 +383,8 @@ finalised AS (
         candidate_id,
         resume_upload_id,
         total_exp_years,
+        relevant_experience_months,
+        relevant_professional_months,
         semantic_score,
         skill_score,
         exp_score,
@@ -215,8 +393,12 @@ finalised AS (
         certs_score,
         total_mandatory_skills,
         matching_mandatory_skills,
-        rule_score,
-        (0.4::numeric * semantic_score) + (0.6::numeric * rule_score) AS final_score,
+        mandatory_ratio,
+        LEAST(1::numeric, mandatory_ratio / 0.4::numeric) AS gate_multiplier,
+        raw_rule_score,
+        (raw_rule_score * LEAST(1::numeric, mandatory_ratio / 0.4::numeric)) AS rule_score,
+        (0.4::numeric * semantic_score)
+            + (0.6::numeric * (raw_rule_score * LEAST(1::numeric, mandatory_ratio / 0.4::numeric))) AS final_score,
         COUNT(*) OVER()::int AS total_candidates
     FROM with_scores
 )
@@ -230,8 +412,13 @@ SELECT
     ROUND(projects_score, 2) AS projects_score,
     ROUND(professional_score, 2) AS professional_score,
     ROUND(certs_score, 2) AS certs_score,
+    ROUND(raw_rule_score, 2) AS raw_rule_score,
+    ROUND(mandatory_ratio, 4) AS mandatory_ratio,
+    ROUND(gate_multiplier, 4) AS gate_multiplier,
     ROUND(rule_score, 2) AS rule_score,
     ROUND(final_score, 2) AS final_score,
+    ROUND(relevant_experience_months, 2) AS relevant_experience_months,
+    ROUND(relevant_professional_months, 2) AS relevant_professional_months,
     matching_mandatory_skills,
     total_mandatory_skills,
     total_candidates
@@ -294,12 +481,21 @@ async def get_top_candidates(
         breakdown = {
             "semantic_score": float(row["semantic_score"] or 0),
             "rule_score": float(row["rule_score"] or 0),
+            "raw_rule_score": float(row["raw_rule_score"] or 0),
             "final_score": float(row["final_score"] or 0),
             "skill_score": float(row["skill_score"] or 0),
             "exp_score": float(row["exp_score"] or 0),
             "projects_score": float(row["projects_score"] or 0),
             "professional_score": float(row["professional_score"] or 0),
             "certs_score": float(row["certs_score"] or 0),
+            "mandatory_ratio": float(row["mandatory_ratio"] or 0),
+            "gate_multiplier": float(row["gate_multiplier"] or 0),
+            "relevant_experience_months": float(
+                row["relevant_experience_months"] or 0
+            ),
+            "relevant_professional_months": float(
+                row["relevant_professional_months"] or 0
+            ),
             "matching_mandatory_skills": int(row["matching_mandatory_skills"] or 0),
             "total_mandatory_skills": int(row["total_mandatory_skills"] or 0),
         }
