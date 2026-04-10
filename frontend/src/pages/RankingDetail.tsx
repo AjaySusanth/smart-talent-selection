@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   ArrowLeft,
   Upload,
@@ -12,6 +12,7 @@ import {
   FolderOpen,
   X,
   TriangleAlert,
+  RefreshCw,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Link, useParams } from "react-router-dom";
@@ -45,6 +46,18 @@ const ProfilePanel = ({ candidate, onClose }: ProfilePanelProps) => {
   const skills = Array.isArray(profile.skills)
     ? profile.skills
     : candidate.candidate.skills;
+  const linkedInUrl =
+    profile.linkedin_url ||
+    profile.linkedin ||
+    candidate.candidate.profile_json?.linkedin_url;
+  const githubUrl =
+    profile.github_url ||
+    profile.github ||
+    candidate.candidate.profile_json?.github_url;
+  const portfolioUrl =
+    profile.portfolio_url ||
+    profile.website ||
+    candidate.candidate.profile_json?.portfolio_url;
 
   return (
     <AnimatePresence>
@@ -90,8 +103,15 @@ const ProfilePanel = ({ candidate, onClose }: ProfilePanelProps) => {
               </h3>
               <div className="space-y-1 text-sm">
                 <p>Phone: {profile.phone || "N/A"}</p>
-                <p>LinkedIn: {profile.linkedin || "N/A"}</p>
-                <p>GitHub: {profile.github || "N/A"}</p>
+                <p>LinkedIn: {linkedInUrl ? (
+                  <a href={linkedInUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">{linkedInUrl}</a>
+                ) : "N/A"}</p>
+                <p>GitHub: {githubUrl ? (
+                  <a href={githubUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">{githubUrl}</a>
+                ) : "N/A"}</p>
+                <p>Portfolio: {portfolioUrl ? (
+                  <a href={portfolioUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">{portfolioUrl}</a>
+                ) : "N/A"}</p>
               </div>
             </section>
 
@@ -158,9 +178,18 @@ const ProfilePanel = ({ candidate, onClose }: ProfilePanelProps) => {
                       <p className="font-semibold text-sm">
                         {item.name || item.title || "Project"}
                       </p>
-                      <p className="text-xs text-muted-foreground">
-                        {item.link || item.url || "No link available"}
-                      </p>
+                      {(item.github_url || item.url || item.link) ? (
+                        <a
+                          href={item.github_url || item.url || item.link}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-primary hover:underline truncate block"
+                        >
+                          {item.github_url || item.url || item.link}
+                        </a>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">No link available</p>
+                      )}
                     </div>
                   ))
                 ) : (
@@ -219,10 +248,12 @@ const ProfilePanel = ({ candidate, onClose }: ProfilePanelProps) => {
 
 const WeightSlider = ({
   label,
+  helpText,
   value,
   onChange,
 }: {
   label: string;
+  helpText?: string;
   value: number;
   onChange: (v: number) => void;
 }) => (
@@ -241,6 +272,9 @@ const WeightSlider = ({
       onChange={(e) => onChange(parseInt(e.target.value, 10))}
       className="w-full h-1.5 bg-slate-800 rounded-full appearance-none cursor-pointer accent-primary"
     />
+    {helpText && (
+      <p className="text-[11px] text-muted-foreground">{helpText}</p>
+    )}
   </div>
 );
 
@@ -249,11 +283,13 @@ const CandidateRow = ({
   rank,
   onOpenProfile,
   onOpenResume,
+  justificationPending,
 }: {
   candidate: CandidateRankingResult;
   rank: number;
   onOpenProfile: (candidate: CandidateRankingResult) => void;
   onOpenResume: (resumeUploadId: string) => void;
+  justificationPending: boolean;
 }) => {
   const [isExpanded, setIsExpanded] = useState(rank === 1);
   const b = candidate.score_breakdown_json;
@@ -351,6 +387,14 @@ const CandidateRow = ({
                   <p className="text-sm text-slate-300 leading-relaxed italic">
                     "{candidate.justification_text}"
                   </p>
+                ) : justificationPending ? (
+                  <div className="space-y-2">
+                    <div className="h-3 w-full bg-white/10 rounded animate-pulse" />
+                    <div className="h-3 w-3/4 bg-white/10 rounded animate-pulse" />
+                    <p className="text-xs text-muted-foreground">
+                      Generating justification...
+                    </p>
+                  </div>
                 ) : (
                   <p className="text-sm text-muted-foreground italic">
                     Justification unavailable.
@@ -441,7 +485,7 @@ export const RankingDetail = () => {
   const [ranking, setRanking] = useState<JobDescriptionRankingResponse | null>(
     null,
   );
-  const [scoringConfig, setScoringConfig] = useState<ScoringConfig | null>(
+  const [_scoringConfig, setScoringConfig] = useState<ScoringConfig | null>(
     null,
   );
 
@@ -455,6 +499,9 @@ export const RankingDetail = () => {
   const [editingJd, setEditingJd] = useState(false);
   const [jdDraft, setJdDraft] = useState("");
   const [savingJd, setSavingJd] = useState(false);
+  const [justificationPolling, setJustificationPolling] = useState(false);
+  const pollStartRef = useRef<number>(Date.now());
+  const pollTimerRef = useRef<number | null>(null);
 
   const [weights, setWeights] = useState<ScoringConfigUpdate>({
     skill_match_weight: 40,
@@ -510,26 +557,77 @@ export const RankingDetail = () => {
     fetchInitialData();
   }, [roleId]);
 
-  const fetchRanking = useCallback(async (jdId: string) => {
-    setRankingLoading(true);
-    try {
-      const res = await api.get<JobDescriptionRankingResponse>(
-        `/jd/${jdId}/ranking`,
-      );
-      setRanking(res.data);
-    } catch (err: any) {
-      setRanking(null);
-      if (err.response?.status !== 404) {
-        setError(err.response?.data?.detail || "Failed to fetch ranking.");
+  const fetchRanking = useCallback(
+    async (jdId: string, opts?: { silent?: boolean }) => {
+      const silent = opts?.silent ?? false;
+      if (!silent) setRankingLoading(true);
+      try {
+        const res = await api.get<JobDescriptionRankingResponse>(
+          `/jd/${jdId}/ranking`,
+        );
+        setRanking(res.data);
+      } catch (err: any) {
+        setRanking(null);
+        if (err.response?.status !== 404) {
+          setError(err.response?.data?.detail || "Failed to fetch ranking.");
+        }
+      } finally {
+        if (!silent) setRankingLoading(false);
       }
-    } finally {
-      setRankingLoading(false);
-    }
-  }, []);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (selectedJdId) fetchRanking(selectedJdId);
   }, [selectedJdId, fetchRanking]);
+
+  useEffect(() => {
+    pollStartRef.current = Date.now();
+    setJustificationPolling(false);
+    if (pollTimerRef.current) {
+      window.clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }, [selectedJdId]);
+
+  useEffect(() => {
+    if (!selectedJdId || !ranking || ranking.candidates.length === 0) {
+      setJustificationPolling(false);
+      return;
+    }
+
+    const pendingTop5 = ranking.candidates
+      .slice(0, 5)
+      .some((candidate) => !candidate.justification_text);
+
+    if (!pendingTop5) {
+      setJustificationPolling(false);
+      return;
+    }
+
+    const elapsed = Date.now() - pollStartRef.current;
+    if (elapsed >= 90_000) {
+      setJustificationPolling(false);
+      return;
+    }
+
+    setJustificationPolling(true);
+    if (pollTimerRef.current) {
+      window.clearTimeout(pollTimerRef.current);
+    }
+
+    pollTimerRef.current = window.setTimeout(() => {
+      fetchRanking(selectedJdId, { silent: true });
+    }, 5000);
+
+    return () => {
+      if (pollTimerRef.current) {
+        window.clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, [ranking, selectedJdId, fetchRanking]);
 
   useEffect(() => {
     if (!selectedJdId) return;
@@ -613,6 +711,11 @@ export const RankingDetail = () => {
     weights.projects_weight +
     weights.prof_exp_weight +
     weights.certs_weight;
+
+  const pendingJustifications =
+    ranking?.candidates
+      ?.slice(0, 5)
+      .some((candidate) => !candidate.justification_text) ?? false;
 
   if (loading) {
     return (
@@ -701,6 +804,16 @@ export const RankingDetail = () => {
                 </option>
               ))}
             </select>
+            <button
+              type="button"
+              className="text-xs px-3 py-2 rounded-md border border-white/10 hover:bg-white/10"
+              onClick={() => {
+                setJdDraft("");
+                setEditingJd(true);
+              }}
+            >
+              Create JD
+            </button>
           </div>
 
           {!editingJd ? (
@@ -767,7 +880,8 @@ export const RankingDetail = () => {
               }
             />
             <WeightSlider
-              label="Experience"
+              label="Experience (Total Years)"
+              helpText="Compares candidate total years against JD minimum years."
               value={weights.exp_years_weight}
               onChange={(v) => setWeights({ ...weights, exp_years_weight: v })}
             />
@@ -777,7 +891,8 @@ export const RankingDetail = () => {
               onChange={(v) => setWeights({ ...weights, projects_weight: v })}
             />
             <WeightSlider
-              label="Professional Exp"
+              label="Professional Experience"
+              helpText="Scores duration in professional-role entries only."
               value={weights.prof_exp_weight}
               onChange={(v) => setWeights({ ...weights, prof_exp_weight: v })}
             />
@@ -797,6 +912,10 @@ export const RankingDetail = () => {
               Total: {weightsTotal}/100{" "}
               {weightsTotal !== 100 && "(must equal 100)"}
             </p>
+            <p className="text-[11px] text-muted-foreground mt-1">
+              Tip: "Experience" is total years; "Professional Experience"
+              focuses on professional-role duration.
+            </p>
           </div>
 
           <button
@@ -811,12 +930,32 @@ export const RankingDetail = () => {
       )}
 
       {jds.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-20 gap-4">
-          <FolderOpen className="w-8 h-8 text-muted-foreground" />
-          <p className="text-muted-foreground text-sm text-center">
-            No job descriptions found for this role. Create one via the API to
-            start ranking candidates.
-          </p>
+        <div className="glass-card rounded-3xl p-6 border border-white/10 space-y-4">
+          <div className="flex items-center gap-2">
+            <FolderOpen className="w-5 h-5 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">
+              No job descriptions found yet. Create one to start ranking
+              candidates.
+            </p>
+          </div>
+          <textarea
+            value={jdDraft}
+            onChange={(e) => setJdDraft(e.target.value)}
+            rows={8}
+            minLength={100}
+            className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-y"
+            placeholder="Paste the full job description here..."
+          />
+          <div className="flex justify-end">
+            <button
+              type="button"
+              className="px-3 py-2 text-sm rounded-md bg-primary text-primary-foreground disabled:opacity-50"
+              onClick={handleSaveJd}
+              disabled={savingJd || jdDraft.trim().length < 100}
+            >
+              {savingJd ? "Saving..." : "Create JD"}
+            </button>
+          </div>
         </div>
       )}
 
@@ -824,7 +963,21 @@ export const RankingDetail = () => {
         <div className="glass-card rounded-3xl overflow-hidden shadow-2xl">
           <div className="bg-white/5 px-8 py-4 flex justify-between items-center border-b border-white/5 font-bold text-xs text-muted-foreground uppercase tracking-widest">
             <span>Candidate Match Pipeline</span>
-            <span>Sorted by AI Score</span>
+            <div className="flex items-center gap-3">
+              {pendingJustifications && (
+                <button
+                  type="button"
+                  className="text-[11px] normal-case inline-flex items-center gap-1 px-2 py-1 rounded border border-white/10 hover:bg-white/10"
+                  onClick={() =>
+                    selectedJdId && fetchRanking(selectedJdId, { silent: true })
+                  }
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  Refresh Justifications
+                </button>
+              )}
+              <span>Sorted by AI Score</span>
+            </div>
           </div>
 
           {rankingLoading && (
@@ -845,6 +998,11 @@ export const RankingDetail = () => {
                   rank={idx + 1}
                   onOpenProfile={(row) => setProfileCandidate(row)}
                   onOpenResume={handleOpenResume}
+                  justificationPending={
+                    idx < 5 &&
+                    !candidate.justification_text &&
+                    justificationPolling
+                  }
                 />
               ))}
             </div>

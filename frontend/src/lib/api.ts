@@ -70,6 +70,12 @@ export const uploadResumes = (jobRoleId: string, files: File[]) => {
 export const getResumeStatus = (uploadId: string) =>
   api.get(`/resumes/status/${uploadId}`);
 
+export const retryResumeParsing = (uploadId: string) =>
+  api.post(`/resumes/${uploadId}/retry`);
+
+export const deleteResumeUpload = (uploadId: string) =>
+  api.delete(`/resumes/${uploadId}`);
+
 export const getReadiness = () =>
   axios.get(`${ROOT_BASE_URL}/health/ready`, {
     headers: {

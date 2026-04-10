@@ -10,8 +10,10 @@ import {
 } from "lucide-react";
 import {
   api,
+  deleteResumeUpload,
   getResumeStatus,
   listRoleResumes,
+  retryResumeParsing,
   uploadResumes,
 } from "../lib/api";
 import type {
@@ -49,6 +51,7 @@ type FileState = {
   original_name: string;
   status: ResumeUploadStatus | "uploading";
   error_message: string | null;
+  guidance_message?: string | null;
   uploaded_at?: string;
   startedAt: number;
   nextPollMs: number;
@@ -64,6 +67,31 @@ const validateFile = (file: File): string | null => {
   return null;
 };
 
+const isLikelyLlmFailure = (
+  errorMessage: string | null | undefined,
+): boolean => {
+  if (!errorMessage) return false;
+  const text = errorMessage.toLowerCase();
+  return (
+    text.includes("validation error for candidateprofile") ||
+    text.includes("unparseable json") ||
+    text.includes("json") ||
+    text.includes("gemini") ||
+    text.includes("groq") ||
+    text.includes("llm")
+  );
+};
+
+const getGuidanceMessage = (
+  errorMessage: string | null | undefined,
+): string | null => {
+  if (!errorMessage) return null;
+  if (isLikelyLlmFailure(errorMessage)) {
+    return "This looks like an AI extraction issue. Please retry parsing.";
+  }
+  return null;
+};
+
 export const UploadPage = () => {
   const { id: roleId } = useParams<{ id: string }>();
 
@@ -74,6 +102,8 @@ export const UploadPage = () => {
 
   const [files, setFiles] = useState<FileState[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
   const [queueErrors, setQueueErrors] = useState<string[]>([]);
 
   const timersRef = useRef<Map<string, number>>(new Map());
@@ -108,6 +138,7 @@ export const UploadPage = () => {
         uploaded_at: item.uploaded_at,
         startedAt: Date.now(),
         nextPollMs: 3000,
+        guidance_message: getGuidanceMessage(item.error_message),
       }));
 
       setFiles((prev) => {
@@ -169,6 +200,7 @@ export const UploadPage = () => {
                 original_name: payload.original_name,
                 status: payload.status,
                 error_message: payload.error_message,
+                guidance_message: getGuidanceMessage(payload.error_message),
                 nextPollMs,
               };
             }),
@@ -254,6 +286,7 @@ export const UploadPage = () => {
             error_message: u.error_message,
             startedAt: Date.now(),
             nextPollMs: 3000,
+            guidance_message: getGuidanceMessage(u.error_message),
           }));
 
           const failed = payload.failed.map((u, idx) => ({
@@ -263,6 +296,7 @@ export const UploadPage = () => {
             error_message: u.error_message,
             startedAt: Date.now(),
             nextPollMs: 3000,
+            guidance_message: getGuidanceMessage(u.error_message),
           }));
 
           return [...uploaded, ...failed, ...withoutTemps];
@@ -274,6 +308,54 @@ export const UploadPage = () => {
         setUploading(false);
       }
     })();
+  };
+
+  const handleRetry = async (uploadId: string) => {
+    setRetryingIds((prev) => new Set(prev).add(uploadId));
+    try {
+      await retryResumeParsing(uploadId);
+      setFiles((current) =>
+        current.map((file) =>
+          file.id === uploadId
+            ? {
+                ...file,
+                status: "queued",
+                error_message: null,
+                guidance_message: null,
+                startedAt: Date.now(),
+                nextPollMs: 3000,
+              }
+            : file,
+        ),
+      );
+    } catch (err: any) {
+      setError(err.response?.data?.detail || "Failed to retry parsing.");
+    } finally {
+      setRetryingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(uploadId);
+        return next;
+      });
+    }
+  };
+
+  const handleDelete = async (uploadId: string) => {
+    const confirmed = window.confirm("Delete this failed resume upload?");
+    if (!confirmed) return;
+
+    setDeletingIds((prev) => new Set(prev).add(uploadId));
+    try {
+      await deleteResumeUpload(uploadId);
+      setFiles((current) => current.filter((file) => file.id !== uploadId));
+    } catch (err: any) {
+      setError(err.response?.data?.detail || "Failed to delete resume.");
+    } finally {
+      setDeletingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(uploadId);
+        return next;
+      });
+    }
   };
 
   const counts = useMemo(() => {
@@ -429,6 +511,36 @@ export const UploadPage = () => {
                         : file.error_message || cfg.label}
                     </span>
                   </div>
+
+                  {file.status === "failed" && file.guidance_message && (
+                    <p className="text-xs text-amber-300 mt-2">
+                      {file.guidance_message}
+                    </p>
+                  )}
+
+                  {file.status === "failed" &&
+                    !file.id.startsWith("failed-") && (
+                      <div className="mt-3 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleRetry(file.id)}
+                          disabled={retryingIds.has(file.id)}
+                          className="text-xs px-2.5 py-1.5 rounded-md border border-primary/30 bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground disabled:opacity-50"
+                        >
+                          {retryingIds.has(file.id)
+                            ? "Retrying..."
+                            : "Retry parsing"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(file.id)}
+                          disabled={deletingIds.has(file.id)}
+                          className="text-xs px-2.5 py-1.5 rounded-md border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/20 disabled:opacity-50"
+                        >
+                          {deletingIds.has(file.id) ? "Deleting..." : "Delete"}
+                        </button>
+                      </div>
+                    )}
                 </div>
               );
             })}

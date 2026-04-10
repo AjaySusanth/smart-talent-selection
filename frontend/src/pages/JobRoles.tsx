@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Plus,
   Search,
@@ -13,7 +13,7 @@ import {
   Upload,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { api, updateJobRole, deactivateJobRole } from "../lib/api";
 import type { JobRole, JobRoleCreate, JobRoleUpdate } from "../types";
 
@@ -123,6 +123,7 @@ const JobRoleCard = ({ role, index, onEdit, onDeactivate }: RoleCardProps) => {
 };
 
 export const JobRoles = () => {
+  const location = useLocation();
   const [roles, setRoles] = useState<JobRole[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -142,26 +143,39 @@ export const JobRoles = () => {
     description: "",
   });
   const [savingEdit, setSavingEdit] = useState(false);
+  const fetchSeqRef = useRef(0);
 
   const fetchRoles = useCallback(async () => {
+    const fetchSeq = ++fetchSeqRef.current;
     setLoading(true);
     setError(null);
     try {
       const response = await api.get<JobRole[]>("/job-roles");
+      if (fetchSeq !== fetchSeqRef.current) {
+        return;
+      }
       setRoles(response.data);
     } catch (err: any) {
+      if (fetchSeq !== fetchSeqRef.current) {
+        return;
+      }
       setError(
         err.response?.data?.detail ||
           "Failed to fetch job roles. Is the backend running?",
       );
     } finally {
-      setLoading(false);
+      if (fetchSeq === fetchSeqRef.current) {
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     fetchRoles();
-  }, [fetchRoles]);
+    return () => {
+      fetchSeqRef.current += 1;
+    };
+  }, [fetchRoles, location.key]);
 
   const handleCreateRole = async () => {
     if (!createForm.title.trim()) return;

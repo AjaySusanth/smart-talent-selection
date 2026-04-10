@@ -4,22 +4,25 @@ from __future__ import annotations
 
 from typing import Annotated
 from uuid import UUID
+from uuid import uuid4
+import hashlib
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, Form, status, Query
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import require_api_key
 from app.db.session import get_db_session
-from app.models.resume_upload import ResumeUpload
+from app.models.resume_upload import ResumeUpload, UploadStatus
 from app.schemas.resume_upload import (
     BatchUploadResponse,
     UploadResponse,
     UploadStatusResponse,
 )
 from app.services.upload_service import get_upload_status, upload_resume_files
-from app.services.storage import get_presigned_url
+from app.services.storage import get_presigned_url, delete_file
+from app.workers.celery_app import celery_app
 
 logger = structlog.get_logger(__name__)
 
@@ -256,3 +259,87 @@ async def list_resumes_for_role(
         }
         for upload in uploads
     ]
+
+
+@router.post("/{upload_id}/retry", status_code=status.HTTP_202_ACCEPTED)
+async def retry_resume_parsing(
+    upload_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+    _: None = Depends(require_api_key),
+):
+    """Manually requeue parsing for a failed resume upload."""
+    upload = await session.get(ResumeUpload, upload_id)
+    if not upload:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Upload not found",
+        )
+
+    if upload.status == UploadStatus.parsing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Upload is already parsing",
+        )
+
+    if upload.status == UploadStatus.queued:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Upload is already queued",
+        )
+
+    # Requeue regardless of prior failure reason; this is a manual override action.
+    await session.execute(
+        update(ResumeUpload)
+        .where(ResumeUpload.id == upload_id)
+        .values(status=UploadStatus.queued, error_message=None)
+    )
+    await session.commit()
+
+    idempotency_key = hashlib.sha256(
+        f"{upload.file_key}:{uuid4()}".encode()
+    ).hexdigest()[:32]
+
+    celery_app.send_task(
+        "app.workers.tasks.parse_resume.parse_resume_task",
+        args=[str(upload.id), upload.file_key],
+        task_id=idempotency_key,
+    )
+
+    return {
+        "id": str(upload.id),
+        "status": "queued",
+        "message": "Parsing retry has been queued",
+    }
+
+
+@router.delete("/{upload_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_resume_upload(
+    upload_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+    _: None = Depends(require_api_key),
+):
+    """Delete a resume upload and associated candidate data (DB cascade)."""
+    upload = await session.get(ResumeUpload, upload_id)
+    if not upload:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Upload not found",
+        )
+
+    if upload.status in (UploadStatus.queued, UploadStatus.parsing):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot delete while parsing is in progress",
+        )
+
+    file_key = upload.file_key
+    await session.delete(upload)
+    await session.commit()
+
+    # Best-effort storage cleanup; DB delete is already committed.
+    try:
+        await delete_file(file_key)
+    except Exception as exc:
+        logger.warning(
+            "resume_storage_delete_failed", upload_id=str(upload_id), exc=str(exc)
+        )
