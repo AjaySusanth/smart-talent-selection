@@ -69,13 +69,22 @@ def _build_match_context(
 
     final_score = float(score_breakdown.get("final_score", 0) or 0)
     skill_score = float(score_breakdown.get("skill_score", 0) or 0)
+    mandatory_ratio = float(score_breakdown.get("mandatory_ratio", 0) or 0)
+    gate_multiplier = float(score_breakdown.get("gate_multiplier", 0) or 0)
     matching_mandatory_skills = int(
         score_breakdown.get("matching_mandatory_skills", 0) or 0
     )
 
     verdict = "Poor fit"
-    if matching_mandatory_skills == 0 or skill_score == 0 or final_score < 45:
+    if (
+        matching_mandatory_skills == 0
+        or mandatory_ratio < 0.4
+        or skill_score == 0
+        or final_score < 45
+    ):
         verdict = "Poor fit"
+    elif gate_multiplier < 0.7:
+        verdict = "Medium fit"
     elif final_score < 65:
         verdict = "Medium fit"
     elif final_score < 80:

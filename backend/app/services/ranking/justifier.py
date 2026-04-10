@@ -30,11 +30,17 @@ def _fit_verdict(match_context: dict | None) -> str:
     context = match_context or {}
     final_score = float(context.get("final_score", 0) or 0)
     skill_score = float(context.get("skill_score", 0) or 0)
+    mandatory_ratio = float(context.get("mandatory_ratio", 0) or 0)
+    gate_multiplier = float(context.get("gate_multiplier", 0) or 0)
     matched_mandatory = int(context.get("matching_mandatory_skills", 0) or 0)
     total_mandatory = int(context.get("total_mandatory_skills", 0) or 0)
 
     if total_mandatory > 0 and matched_mandatory == 0:
         return "Poor fit"
+    if total_mandatory > 0 and mandatory_ratio < 0.4:
+        return "Poor fit"
+    if total_mandatory > 0 and gate_multiplier < 0.7:
+        return "Medium fit"
     if skill_score == 0 or final_score < 45:
         return "Poor fit"
     if final_score < 65:

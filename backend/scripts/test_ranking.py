@@ -94,6 +94,9 @@ async def main() -> None:
                 f"final={breakdown['final_score']:.2f} "
                 f"semantic={breakdown['semantic_score']:.2f} "
                 f"rule={breakdown['rule_score']:.2f} "
+                f"raw_rule={breakdown.get('raw_rule_score', 0):.2f} "
+                f"gate={breakdown.get('gate_multiplier', 1):.2f} "
+                f"mandatory_ratio={breakdown.get('mandatory_ratio', 0):.2f} "
                 f"skills={breakdown['matching_mandatory_skills']}/{breakdown['total_mandatory_skills']}"
             )
 

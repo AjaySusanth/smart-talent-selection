@@ -416,7 +416,7 @@ const CandidateRow = ({
                 </div>
                 <div className="p-4 rounded-xl bg-white/5 border border-white/10">
                   <p className="text-[10px] font-bold text-muted-foreground uppercase mb-2">
-                    Experience
+                    Domain Experience
                   </p>
                   <p className="text-xl font-bold">
                     {Number(b.exp_score || 0).toFixed(1)}
@@ -521,9 +521,9 @@ export const RankingDetail = () => {
 
   const [weights, setWeights] = useState<ScoringConfigUpdate>({
     skill_match_weight: 40,
-    exp_years_weight: 20,
+    exp_years_weight: 0,
     projects_weight: 20,
-    prof_exp_weight: 15,
+    prof_exp_weight: 35,
     certs_weight: 5,
   });
 
@@ -552,11 +552,13 @@ export const RankingDetail = () => {
             `/job-roles/${roleId}/scoring-config`,
           );
           setScoringConfig(configRes.data);
+          const mergedExperienceWeight =
+            configRes.data.exp_years_weight + configRes.data.prof_exp_weight;
           setWeights({
             skill_match_weight: configRes.data.skill_match_weight,
-            exp_years_weight: configRes.data.exp_years_weight,
+            exp_years_weight: 0,
             projects_weight: configRes.data.projects_weight,
-            prof_exp_weight: configRes.data.prof_exp_weight,
+            prof_exp_weight: mergedExperienceWeight,
             certs_weight: configRes.data.certs_weight,
           });
         } catch {
@@ -652,12 +654,17 @@ export const RankingDetail = () => {
 
   const handleApplyWeights = async () => {
     if (!roleId) return;
+    const payload: ScoringConfigUpdate = {
+      ...weights,
+      exp_years_weight: 0,
+      prof_exp_weight: weights.prof_exp_weight + weights.exp_years_weight,
+    };
     const total =
-      weights.skill_match_weight +
-      weights.exp_years_weight +
-      weights.projects_weight +
-      weights.prof_exp_weight +
-      weights.certs_weight;
+      payload.skill_match_weight +
+      payload.exp_years_weight +
+      payload.projects_weight +
+      payload.prof_exp_weight +
+      payload.certs_weight;
 
     if (total !== 100) {
       alert(`Weights must sum to 100. Current total: ${total}`);
@@ -668,9 +675,10 @@ export const RankingDetail = () => {
     try {
       const res = await api.put<ScoringConfig>(
         `/job-roles/${roleId}/scoring-config`,
-        weights,
+        payload,
       );
       setScoringConfig(res.data);
+      setWeights(payload);
       if (jd?.id) await fetchRanking(jd.id);
     } catch (err: any) {
       alert(err.response?.data?.detail || "Failed to update weights.");
@@ -903,19 +911,13 @@ export const RankingDetail = () => {
               }
             />
             <WeightSlider
-              label="Experience (Total Years)"
-              helpText="Compares candidate total years against JD minimum years."
-              value={weights.exp_years_weight}
-              onChange={(v) => setWeights({ ...weights, exp_years_weight: v })}
-            />
-            <WeightSlider
               label="Projects"
               value={weights.projects_weight}
               onChange={(v) => setWeights({ ...weights, projects_weight: v })}
             />
             <WeightSlider
-              label="Professional Experience"
-              helpText="Scores duration in professional-role entries only."
+              label="Experience Relevance"
+              helpText="Scores only JD-domain-relevant professional experience."
               value={weights.prof_exp_weight}
               onChange={(v) => setWeights({ ...weights, prof_exp_weight: v })}
             />
@@ -936,8 +938,7 @@ export const RankingDetail = () => {
               {weightsTotal !== 100 && "(must equal 100)"}
             </p>
             <p className="text-[11px] text-muted-foreground mt-1">
-              Tip: "Experience" is total years; "Professional Experience"
-              focuses on professional-role duration.
+              Tip: Experience uses JD-domain relevance, not raw total years.
             </p>
           </div>
 
