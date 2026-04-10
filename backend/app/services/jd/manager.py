@@ -79,6 +79,18 @@ async def create_job_description(
         raise
 
 
+async def list_job_descriptions_for_role(
+    session: AsyncSession,
+    job_role_id,
+) -> list[JobDescription]:
+    result = await session.execute(
+        select(JobDescription)
+        .where(JobDescription.job_role_id == job_role_id)
+        .order_by(JobDescription.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
 async def get_job_description(
     session: AsyncSession,
     jd_id,

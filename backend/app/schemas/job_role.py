@@ -11,6 +11,13 @@ class JobRoleCreate(BaseModel):
     description: str | None = None
 
 
+class JobRoleUpdate(BaseModel):
+    """Partial update for job role fields."""
+
+    title: str | None = Field(None, min_length=1, max_length=200)
+    description: str | None = None
+
+
 class JobRoleResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
