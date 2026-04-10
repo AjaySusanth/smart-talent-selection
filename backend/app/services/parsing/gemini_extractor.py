@@ -39,6 +39,7 @@ from app.schemas.candidate_profile import CandidateProfile
 from app.services.parsing.issuer_normaliser import resolve_issuer
 from app.services.parsing.ner_extractor import NERResult
 from app.services.parsing.regex_extractor import RegexResult
+from app.services.parsing.experience_calculator import compute_total_experience_years
 
 logger = structlog.get_logger(__name__)
 
@@ -465,8 +466,44 @@ def _merge_hyperlinks(profile: CandidateProfile, hyperlinks: dict) -> None:
     if hyperlinks.get("github_url"):
         profile.github_url = hyperlinks["github_url"]
 
-    # GitHub repo URLs — fuzzy match to projects by name
+    # Portfolio / personal website — detect from project_urls
+    # Look for non-platform personal domains in the hyperlinks
+    _PLATFORM_DOMAINS = {
+        "github.com", "linkedin.com", "medium.com", "dev.to",
+        "youtube.com", "twitter.com", "x.com", "facebook.com",
+        "instagram.com", "stackoverflow.com", "leetcode.com",
+        "hackerrank.com", "leanpub.com", "patents.google.com",
+        "reactnative.dev", "npmjs.com", "pypi.org",
+    }
     project_urls = hyperlinks.get("project_urls", [])
+    if not profile.portfolio_url:
+        for url in project_urls:
+            if url.startswith("mailto:"):
+                continue
+            try:
+                from urllib.parse import urlparse as _urlparse
+                parsed = _urlparse(url)
+                domain = parsed.netloc.lower().removeprefix("www.")
+                # Skip known platforms
+                if any(domain.endswith(p) for p in _PLATFORM_DOMAINS):
+                    continue
+                # Skip GitHub repo URLs
+                if "github.com" in domain:
+                    continue
+                # A personal portfolio is typically a short path (/ or /about etc.)
+                path_parts = [p for p in parsed.path.split("/") if p]
+                if len(path_parts) <= 1:
+                    profile.portfolio_url = url
+                    logger.info(
+                        "portfolio_url_detected",
+                        url=url,
+                        source="hyperlink_project_urls",
+                    )
+                    break
+            except Exception:
+                continue
+
+    # GitHub repo URLs — fuzzy match to projects by name
     github_repo_urls = [u for u in project_urls if "github.com/" in u.lower()]
     if github_repo_urls and profile.projects:
         resume_urls, phantom_urls = _filter_project_urls_to_resume(
@@ -837,6 +874,19 @@ def extract_structured_profile(
 
     # Step 3: Resolve missing certification issuers
     _apply_issuer_normalisation(profile)
+
+    # Step 4: Deterministic experience calculation (overrides LLM arithmetic)
+    llm_exp_years = profile.total_experience_years
+    computed_exp_years = compute_total_experience_years(profile)
+    if computed_exp_years > 0:
+        profile.total_experience_years = computed_exp_years
+        if abs(computed_exp_years - llm_exp_years) > 0.5:
+            logger.warning(
+                "experience_years_corrected",
+                llm_value=llm_exp_years,
+                computed_value=computed_exp_years,
+                delta=round(computed_exp_years - llm_exp_years, 1),
+            )
 
     logger.info(
         "gemini_extraction_complete",

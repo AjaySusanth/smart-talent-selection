@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Plus,
   Search,
@@ -13,8 +13,8 @@ import {
   Upload,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Link } from "react-router-dom";
-import { api, updateJobRole, deactivateJobRole } from "../lib/api";
+import { Link, useLocation } from "react-router-dom";
+import { api, updateJobRole, deactivateJobRole, activateJobRole } from "../lib/api";
 import type { JobRole, JobRoleCreate, JobRoleUpdate } from "../types";
 
 type RoleCardProps = {
@@ -22,9 +22,10 @@ type RoleCardProps = {
   index: number;
   onEdit: (role: JobRole) => void;
   onDeactivate: (role: JobRole) => void;
+  onActivate: (role: JobRole) => void;
 };
 
-const JobRoleCard = ({ role, index, onEdit, onDeactivate }: RoleCardProps) => {
+const JobRoleCard = ({ role, index, onEdit, onDeactivate, onActivate }: RoleCardProps) => {
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
@@ -75,16 +76,29 @@ const JobRoleCard = ({ role, index, onEdit, onDeactivate }: RoleCardProps) => {
                 >
                   Edit role
                 </button>
-                <button
-                  type="button"
-                  className="w-full text-left px-3 py-2 text-sm rounded-lg text-red-400 hover:bg-red-500/10"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onDeactivate(role);
-                  }}
-                >
-                  Deactivate
-                </button>
+                {role.is_active ? (
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm rounded-lg text-red-400 hover:bg-red-500/10"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onDeactivate(role);
+                    }}
+                  >
+                    Deactivate
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm rounded-lg text-emerald-300 hover:bg-emerald-500/10"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onActivate(role);
+                    }}
+                  >
+                    Activate
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -123,6 +137,7 @@ const JobRoleCard = ({ role, index, onEdit, onDeactivate }: RoleCardProps) => {
 };
 
 export const JobRoles = () => {
+  const location = useLocation();
   const [roles, setRoles] = useState<JobRole[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -142,26 +157,39 @@ export const JobRoles = () => {
     description: "",
   });
   const [savingEdit, setSavingEdit] = useState(false);
+  const fetchSeqRef = useRef(0);
 
   const fetchRoles = useCallback(async () => {
+    const fetchSeq = ++fetchSeqRef.current;
     setLoading(true);
     setError(null);
     try {
       const response = await api.get<JobRole[]>("/job-roles");
+      if (fetchSeq !== fetchSeqRef.current) {
+        return;
+      }
       setRoles(response.data);
     } catch (err: any) {
+      if (fetchSeq !== fetchSeqRef.current) {
+        return;
+      }
       setError(
         err.response?.data?.detail ||
           "Failed to fetch job roles. Is the backend running?",
       );
     } finally {
-      setLoading(false);
+      if (fetchSeq === fetchSeqRef.current) {
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     fetchRoles();
-  }, [fetchRoles]);
+    return () => {
+      fetchSeqRef.current += 1;
+    };
+  }, [fetchRoles, location.key]);
 
   const handleCreateRole = async () => {
     if (!createForm.title.trim()) return;
@@ -209,6 +237,15 @@ export const JobRoles = () => {
       await fetchRoles();
     } catch (err: any) {
       setError(err.response?.data?.detail || "Failed to deactivate job role.");
+    }
+  };
+
+  const handleActivate = async (role: JobRole) => {
+    try {
+      await activateJobRole(role.id);
+      await fetchRoles();
+    } catch (err: any) {
+      setError(err.response?.data?.detail || "Failed to activate job role.");
     }
   };
 
@@ -312,6 +349,7 @@ export const JobRoles = () => {
               index={idx}
               onEdit={openEditModal}
               onDeactivate={handleDeactivate}
+              onActivate={handleActivate}
             />
           ))}
         </div>
