@@ -68,12 +68,30 @@ class CandidateRankingBreakdown(BaseModel):
     total_mandatory_skills: int
 
 
-class CandidateRankingResult(BaseModel):
-    candidate_id: UUID
+class CandidateInMatch(BaseModel):
+    """Full candidate data nested in ranking response."""
+
+    id: UUID
     resume_upload_id: UUID
+    full_name: str
+    email: str | None = None
     total_exp_years: float
-    breakdown: CandidateRankingBreakdown
+    skills: list[str] = Field(default_factory=list)
+    is_low_confidence: bool
+    profile_json: dict = Field(default_factory=dict)
+
+
+class CandidateRankingResult(BaseModel):
+    """Updated to include full candidate data instead of just candidate_id."""
+
+    candidate: CandidateInMatch
+    semantic_score: float
+    rule_score: float
+    final_score: float
+    score_breakdown_json: dict  # Full breakdown with all component scores
     justification_text: str | None = None
+    justification_model: str | None = None
+    ranked_at: datetime | None = None
 
 
 class JobDescriptionRankingResponse(BaseModel):

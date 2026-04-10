@@ -11,6 +11,7 @@ from app.core.exceptions import RankingError
 from app.core.security import require_api_key
 from app.db.session import get_db_session
 from app.schemas.job_description import (
+    CandidateInMatch,
     CandidateRankingResult,
     JDRequirements,
     JobDescriptionCreate,
@@ -104,11 +105,54 @@ async def get_jd_ranking_endpoint(
             detail="Failed to rank candidates for this JD",
         ) from exc
 
+    # Fetch full candidate data for each ranked result
+    from sqlalchemy import select
+    from app.models.candidate import Candidate
+    from app.models.job_match import JobMatch
+
+    candidate_results = []
+    for ranked_item in ranked_rows:
+        candidate = await session.get(Candidate, ranked_item["candidate_id"])
+        if not candidate:
+            continue
+
+        # Fetch job match record for justification
+        match_result = await session.execute(
+            select(JobMatch).where(
+                JobMatch.jd_id == jd_id,
+                JobMatch.candidate_id == ranked_item["candidate_id"],
+            )
+        )
+        job_match = match_result.scalar_one_or_none()
+
+        profile = candidate.profile_json or {}
+        candidate_results.append(
+            CandidateRankingResult(
+                candidate=CandidateInMatch(
+                    id=candidate.id,
+                    resume_upload_id=candidate.resume_upload_id,
+                    full_name=profile.get("full_name", "Unknown Candidate"),
+                    email=profile.get("email"),
+                    total_exp_years=float(candidate.total_exp_years),
+                    skills=profile.get("skills", []),
+                    is_low_confidence=candidate.is_low_confidence,
+                    profile_json=profile,
+                ),
+                semantic_score=ranked_item["breakdown"]["semantic_score"],
+                rule_score=ranked_item["breakdown"]["rule_score"],
+                final_score=ranked_item["breakdown"]["final_score"],
+                score_breakdown_json=ranked_item["breakdown"],
+                justification_text=job_match.justification_text if job_match else None,
+                justification_model=(
+                    job_match.justification_model if job_match else None
+                ),
+                ranked_at=job_match.ranked_at if job_match else None,
+            )
+        )
+
     return JobDescriptionRankingResponse(
         jd_id=jd_id,
         total_candidates=total_candidates,
-        returned_candidates=len(ranked_rows),
-        candidates=[
-            CandidateRankingResult.model_validate(item) for item in ranked_rows
-        ],
+        returned_candidates=len(candidate_results),
+        candidates=candidate_results,
     )

@@ -6,17 +6,20 @@ from typing import Annotated
 from uuid import UUID
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, Form, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, Form, status, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import require_api_key
 from app.db.session import get_db_session
+from app.models.resume_upload import ResumeUpload
 from app.schemas.resume_upload import (
     BatchUploadResponse,
     UploadResponse,
     UploadStatusResponse,
 )
 from app.services.upload_service import get_upload_status, upload_resume_files
+from app.services.storage import get_presigned_url
 
 logger = structlog.get_logger(__name__)
 
@@ -153,3 +156,103 @@ async def check_upload_status(
         error_message=upload.error_message,
         file_key=upload.file_key,
     )
+
+
+@router.get("/{upload_id}/file")
+async def get_resume_file_url(
+    upload_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+    _: None = Depends(require_api_key),
+):
+    """
+    Get a signed URL for downloading a resume file.
+
+    **Path Parameters:**
+    - `upload_id`: UUID of the resume upload
+
+    **Response:**
+    - `url`: Signed URL (valid for 60 seconds)
+    - `filename`: Original filename
+    - `mime_type`: Content type
+    """
+    upload = await session.get(ResumeUpload, upload_id)
+    if not upload:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resume not found",
+        )
+
+    try:
+        signed_url = await get_presigned_url(upload.file_key, expiry_seconds=60)
+    except Exception as exc:
+        logger.error(
+            "generate_signed_url_error", upload_id=str(upload_id), exc=str(exc)
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to generate file download link",
+        ) from exc
+
+    return {
+        "url": signed_url,
+        "filename": upload.original_name,
+        "mime_type": upload.mime_type,
+    }
+
+
+@router.get("")
+async def list_resumes(
+    job_role_id: Annotated[UUID, Query()],
+    session: AsyncSession = Depends(get_db_session),
+    _: None = Depends(require_api_key),
+):
+    """List upload records for a job role via query param contract."""
+    result = await session.execute(
+        select(ResumeUpload)
+        .where(ResumeUpload.job_role_id == job_role_id)
+        .order_by(ResumeUpload.uploaded_at.desc())
+    )
+    uploads = result.scalars().all()
+    return [
+        {
+            "id": str(upload.id),
+            "original_name": upload.original_name,
+            "status": upload.status,
+            "error_message": upload.error_message,
+            "uploaded_at": upload.uploaded_at,
+        }
+        for upload in uploads
+    ]
+
+
+@router.get("/jobs/{job_role_id}")
+async def list_resumes_for_role(
+    job_role_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+    _: None = Depends(require_api_key),
+):
+    """
+    List all resume uploads for a specific job role.
+
+    **Path Parameters:**
+    - `job_role_id`: UUID of the job role
+
+    **Response:** Array of upload records with status
+    """
+    result = await session.execute(
+        select(ResumeUpload)
+        .where(ResumeUpload.job_role_id == job_role_id)
+        .order_by(ResumeUpload.uploaded_at.desc())
+    )
+    uploads = result.scalars().all()
+
+    return [
+        {
+            "id": str(upload.id),
+            "original_name": upload.original_name,
+            "status": upload.status,
+            "error_message": upload.error_message,
+            "uploaded_at": upload.uploaded_at,
+        }
+        for upload in uploads
+    ]

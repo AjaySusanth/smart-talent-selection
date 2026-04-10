@@ -91,13 +91,29 @@ _OUTPUT_SCHEMA = """{
 }"""
 
 
-def _normalise_profile_keys(data: dict) -> dict:
+def _normalise_profile_keys(data: dict, fallback_name: str | None = None) -> dict:
     """
     Backward-compatible field normalization before Pydantic validation.
 
     Some model responses use older keys like `role` and `description` inside
     experience entries. This remaps them to the current schema.
     """
+    # Normalise full name from alternative keys or fallback hints when model returns null.
+    full_name = data.get("full_name")
+    if not isinstance(full_name, str) or not full_name.strip():
+        alt_name = data.get("name")
+        if isinstance(alt_name, str) and alt_name.strip():
+            data["full_name"] = alt_name.strip()
+        elif isinstance(fallback_name, str) and fallback_name.strip():
+            data["full_name"] = fallback_name.strip()
+        else:
+            data["full_name"] = "Unknown Candidate"
+
+    # Guard summary as well because schema requires a string.
+    summary = data.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        data["summary"] = "Summary not available from parsed resume text."
+
     experiences = data.get("experience")
     if not isinstance(experiences, list):
         return data
@@ -194,7 +210,10 @@ def _try_repair_json(text: str) -> str | None:
         return None
 
 
-def _parse_response(response_text: str) -> CandidateProfile:
+def _parse_response(
+    response_text: str,
+    fallback_name: str | None = None,
+) -> CandidateProfile:
     """
     Parse and validate the Gemini response into a CandidateProfile.
 
@@ -238,7 +257,7 @@ def _parse_response(response_text: str) -> CandidateProfile:
         logger.info("gemini_json_repair_succeeded")
         data = json.loads(repaired)
 
-    data = _normalise_profile_keys(data)
+    data = _normalise_profile_keys(data, fallback_name=fallback_name)
     return CandidateProfile.model_validate(data)
 
 
@@ -794,7 +813,8 @@ def extract_structured_profile(
     )
 
     # Parse and validate
-    profile = _parse_response(response_text)
+    fallback_name = ner_hints.names[0] if ner_hints.names else None
+    profile = _parse_response(response_text, fallback_name=fallback_name)
 
     # ── Post-processing overlay pipeline ───────────────────────────────
     # Each step can override the previous one. Order matters:

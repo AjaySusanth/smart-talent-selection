@@ -1,0 +1,62 @@
+@import "tailwindcss";
+
+:root {
+  --accent: #5b6af0;
+  --success: #34c98a;
+  --warning: #f5a623;
+  --error: #f05252;
+  --score-high: #34c98a;
+  --score-mid: #f5a623;
+  --score-low: #f05252;
+}
+
+@theme {
+  --color-background: #020617; /* slate-950 */
+  --color-foreground: #f8fafc; /* slate-50 */
+
+  --color-primary: #10b981; /* emerald-500 */
+  --color-primary-foreground: #020617;
+
+  --color-secondary: #1e293b; /* slate-800 */
+  --color-secondary-foreground: #f8fafc;
+
+  --color-muted: #334155; /* slate-700 */
+  --color-muted-foreground: #94a3b8; /* slate-400 */
+
+  --color-accent: #3b82f6; /* blue-500 */
+  --color-accent-foreground: #f8fafc;
+
+  --color-border: #1e293b; /* slate-800 */
+  --color-input: #1e293b;
+  --color-ring: #10b981;
+
+  --radius-lg: 1rem;
+  --radius-md: 0.75rem;
+  --radius-sm: 0.5rem;
+
+  --font-sans: "DM Sans", "Outfit", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings:
+      "rlig" 1,
+      "calt" 1;
+  }
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-slate-900/40 backdrop-blur-md border border-white/10;
+  }
+  .glass-card {
+    @apply bg-white/5 backdrop-blur-lg border border-white/10 shadow-xl;
+  }
+  .animate-in {
+    transition: all 0.5s ease-out;
+  }
+}
