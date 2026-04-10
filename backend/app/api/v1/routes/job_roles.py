@@ -179,3 +179,22 @@ async def deactivate_job_role_endpoint(
 
     await db.execute(update(JobRole).where(JobRole.id == id).values(is_active=False))
     await db.commit()
+
+
+@router.post("/{id}/activate", status_code=status.HTTP_204_NO_CONTENT)
+async def activate_job_role_endpoint(
+    id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    _: Annotated[None, Depends(require_api_key)],
+) -> None:
+    """Activate a previously deactivated job role."""
+    result = await db.execute(select(JobRole).where(JobRole.id == id))
+    job_role = result.scalar_one_or_none()
+    if not job_role:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job role not found",
+        )
+
+    await db.execute(update(JobRole).where(JobRole.id == id).values(is_active=True))
+    await db.commit()

@@ -48,6 +48,14 @@ export const updateJobRole = (id: string, payload: JobRoleUpdate) =>
 // Helper method to deactivate a job role
 export const deactivateJobRole = (id: string) => api.delete(`/job-roles/${id}`);
 
+// Helper method to activate a deactivated role
+export const activateJobRole = (id: string) =>
+  api.post(`/job-roles/${id}/activate`);
+
+// Helper method to delete a candidate and linked resume
+export const deleteCandidate = (candidateId: string) =>
+  api.delete(`/candidates/${candidateId}`);
+
 // Helper method to get signed URL for resume download
 export const getResumeFileUrl = (uploadId: string) =>
   api.get(`/resumes/${uploadId}/file`);

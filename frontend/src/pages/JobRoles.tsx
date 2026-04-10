@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Link, useLocation } from "react-router-dom";
-import { api, updateJobRole, deactivateJobRole } from "../lib/api";
+import { api, updateJobRole, deactivateJobRole, activateJobRole } from "../lib/api";
 import type { JobRole, JobRoleCreate, JobRoleUpdate } from "../types";
 
 type RoleCardProps = {
@@ -22,9 +22,10 @@ type RoleCardProps = {
   index: number;
   onEdit: (role: JobRole) => void;
   onDeactivate: (role: JobRole) => void;
+  onActivate: (role: JobRole) => void;
 };
 
-const JobRoleCard = ({ role, index, onEdit, onDeactivate }: RoleCardProps) => {
+const JobRoleCard = ({ role, index, onEdit, onDeactivate, onActivate }: RoleCardProps) => {
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
@@ -75,16 +76,29 @@ const JobRoleCard = ({ role, index, onEdit, onDeactivate }: RoleCardProps) => {
                 >
                   Edit role
                 </button>
-                <button
-                  type="button"
-                  className="w-full text-left px-3 py-2 text-sm rounded-lg text-red-400 hover:bg-red-500/10"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onDeactivate(role);
-                  }}
-                >
-                  Deactivate
-                </button>
+                {role.is_active ? (
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm rounded-lg text-red-400 hover:bg-red-500/10"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onDeactivate(role);
+                    }}
+                  >
+                    Deactivate
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm rounded-lg text-emerald-300 hover:bg-emerald-500/10"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onActivate(role);
+                    }}
+                  >
+                    Activate
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -226,6 +240,15 @@ export const JobRoles = () => {
     }
   };
 
+  const handleActivate = async (role: JobRole) => {
+    try {
+      await activateJobRole(role.id);
+      await fetchRoles();
+    } catch (err: any) {
+      setError(err.response?.data?.detail || "Failed to activate job role.");
+    }
+  };
+
   const filteredRoles = roles
     .filter((r) => showInactive || r.is_active)
     .filter(
@@ -326,6 +349,7 @@ export const JobRoles = () => {
               index={idx}
               onEdit={openEditModal}
               onDeactivate={handleDeactivate}
+              onActivate={handleActivate}
             />
           ))}
         </div>

@@ -13,10 +13,11 @@ import {
   X,
   TriangleAlert,
   RefreshCw,
+  Trash2,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Link, useParams } from "react-router-dom";
-import { api, getResumeFileUrl } from "../lib/api";
+import { api, deleteCandidate, getResumeFileUrl } from "../lib/api";
 import type {
   JobRole,
   JobDescription,
@@ -283,12 +284,14 @@ const CandidateRow = ({
   rank,
   onOpenProfile,
   onOpenResume,
+  onDeleteCandidate,
   justificationPending,
 }: {
   candidate: CandidateRankingResult;
   rank: number;
   onOpenProfile: (candidate: CandidateRankingResult) => void;
   onOpenResume: (resumeUploadId: string) => void;
+  onDeleteCandidate: (candidateId: string, candidateName: string) => void;
   justificationPending: boolean;
 }) => {
   const [isExpanded, setIsExpanded] = useState(rank === 1);
@@ -465,6 +468,20 @@ const CandidateRow = ({
                     title="View original resume"
                   >
                     <FileText className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    className="w-10 h-10 bg-red-500/10 border border-red-500/30 text-red-300 flex items-center justify-center rounded-lg hover:bg-red-500/20 transition-colors"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDeleteCandidate(
+                        candidate.candidate.id,
+                        candidate.candidate.full_name,
+                      );
+                    }}
+                    title="Delete candidate and resume"
+                  >
+                    <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
               </div>
@@ -702,6 +719,25 @@ export const RankingDetail = () => {
       alert(err.response?.data?.detail || "Failed to save JD.");
     } finally {
       setSavingJd(false);
+    }
+  };
+
+  const handleDeleteCandidate = async (
+    candidateId: string,
+    candidateName: string,
+  ) => {
+    const confirmed = window.confirm(
+      `Delete candidate \"${candidateName}\"? This will delete their resume and profile details.`,
+    );
+    if (!confirmed) return;
+
+    try {
+      await deleteCandidate(candidateId);
+      if (selectedJdId) {
+        await fetchRanking(selectedJdId);
+      }
+    } catch (err: any) {
+      alert(err.response?.data?.detail || "Failed to delete candidate.");
     }
   };
 
@@ -998,6 +1034,7 @@ export const RankingDetail = () => {
                   rank={idx + 1}
                   onOpenProfile={(row) => setProfileCandidate(row)}
                   onOpenResume={handleOpenResume}
+                  onDeleteCandidate={handleDeleteCandidate}
                   justificationPending={
                     idx < 5 &&
                     !candidate.justification_text &&
