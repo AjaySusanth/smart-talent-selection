@@ -105,7 +105,3 @@ For the top 5 candidates, an "analyst" agent (Gemini 2.0) generates exactly **tw
    - **Frontend**: [http://localhost:3000](http://localhost:3000)
    - **Backend API**: [http://localhost:8000/api/v1](http://localhost:8000/api/v1)
    - **API Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
-
-
-## 📄 License
-This project is licensed under the MIT License - see the LICENSE file for details.
