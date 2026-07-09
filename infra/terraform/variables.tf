@@ -62,3 +62,13 @@ variable "openai_api_key" {
   sensitive = true
 }
 
+variable "azure_openai_endpoint" {
+  type      = string
+  sensitive = true
+}
+
+variable "azure_openai_key" {
+  type      = string
+  sensitive = true
+}
+

@@ -25,11 +25,11 @@ resource "azurerm_postgresql_flexible_server" "db" {
   tags = azurerm_resource_group.rg.tags
 }
 
-# Register the vector extension so the app can run "CREATE EXTENSION vector;"
+# Register the vector and uuid-ossp extensions so the migrations can load them
 resource "azurerm_postgresql_flexible_server_configuration" "extensions" {
   name      = "azure.extensions"
   server_id = azurerm_postgresql_flexible_server.db.id
-  value     = "vector"
+  value     = "vector,uuid-ossp"
 }
 
 # Allow Azure Internal Services to connect to Postgres

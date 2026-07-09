@@ -19,10 +19,15 @@ def _client() -> AzureOpenAI:
             "Azure OpenAI is not configured. Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_KEY."
         )
 
+    # Normalise endpoint to base URL
+    endpoint = settings.azure_openai_endpoint
+    if "/openai" in endpoint:
+        endpoint = endpoint.split("/openai")[0]
+
     return AzureOpenAI(
         api_key=settings.azure_openai_key,
         api_version=settings.azure_openai_api_version,
-        azure_endpoint=settings.azure_openai_endpoint,
+        azure_endpoint=endpoint,
     )
 
 
