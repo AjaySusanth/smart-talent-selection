@@ -25,17 +25,21 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Smart Talent Selection Engine", lifespan=lifespan)
 
-if settings.environment == "development":
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[
-            "http://localhost:3000",
-            "http://localhost:5173",
-        ],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*", "x-api-key"],
-    )
+# CORS Configuration
+origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+]
+if settings.environment != "development":
+    origins.append("https://nice-mushroom-058604500.7.azurestaticapps.net")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*", "x-api-key"],
+)
 
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
