@@ -6,6 +6,7 @@ resource "azurerm_managed_redis" "redis" {
 
   default_database {
     access_keys_authentication_enabled = true
+    clustering_policy                  = "NoCluster"
   }
 
   tags = azurerm_resource_group.rg.tags

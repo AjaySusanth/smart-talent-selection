@@ -46,7 +46,7 @@ resource "azurerm_key_vault_secret" "db_url" {
 
 resource "azurerm_key_vault_secret" "redis_url" {
   name         = "redis-url"
-  value        = "rediss://:${azurerm_managed_redis.redis.default_database[0].primary_access_key}@${azurerm_managed_redis.redis.hostname}:${azurerm_managed_redis.redis.default_database[0].port}/0"
+  value        = "rediss://default:${azurerm_managed_redis.redis.default_database[0].primary_access_key}@${azurerm_managed_redis.redis.hostname}:${azurerm_managed_redis.redis.default_database[0].port}/0?ssl_cert_reqs=CERT_NONE"
   key_vault_id = azurerm_key_vault.kv.id
 }
 

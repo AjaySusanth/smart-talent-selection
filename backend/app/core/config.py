@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,6 +12,14 @@ class Settings(BaseSettings):
 
     database_url: str
     redis_url: str
+
+    @field_validator("redis_url", mode="after")
+    @classmethod
+    def validate_redis_url(cls, v: str) -> str:
+        if v.startswith("rediss://") and "ssl_cert_reqs" not in v:
+            separator = "&" if "?" in v else "?"
+            return f"{v}{separator}ssl_cert_reqs=CERT_NONE"
+        return v
 
     supabase_url: str
     supabase_service_key: str

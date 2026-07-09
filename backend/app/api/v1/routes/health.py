@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from redis.asyncio import from_url
@@ -6,6 +7,7 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.db.session import engine
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["health"])
 
 
@@ -23,13 +25,19 @@ async def readiness():
     try:
         async with engine.connect() as connection:
             await connection.execute(text("SELECT 1"))
-    except Exception:
+    except Exception as e:
+        logger.error(f"Readiness check failed for Database: {e}", exc_info=True)
         database_status = "error"
 
-    redis_client = from_url(settings.redis_url, decode_responses=True)
+    redis_url = settings.redis_url
+    if "ssl_cert_reqs=CERT_NONE" in redis_url:
+        redis_url = redis_url.replace("ssl_cert_reqs=CERT_NONE", "ssl_cert_reqs=none")
+
+    redis_client = from_url(redis_url, decode_responses=True)
     try:
         await redis_client.ping()
-    except Exception:
+    except Exception as e:
+        logger.error(f"Readiness check failed for Redis: {e}", exc_info=True)
         redis_status = "error"
     finally:
         await redis_client.aclose()
