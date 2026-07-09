@@ -13,9 +13,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
 
-# Convert async URL to sync: postgresql+asyncpg:// → postgresql+psycopg2://
-_sync_url = settings.database_url.replace(
-    "postgresql+asyncpg", "postgresql+psycopg2"
+# Convert async URL to sync:
+#   postgresql+asyncpg:// → postgresql+psycopg2://
+#   ?ssl=require          → ?sslmode=require   (psycopg2/libpq uses sslmode, not ssl)
+_sync_url = (
+    settings.database_url
+    .replace("postgresql+asyncpg", "postgresql+psycopg2")
+    .replace("?ssl=require", "?sslmode=require")
+    .replace("&ssl=require", "&sslmode=require")
 )
 
 sync_engine = create_engine(_sync_url, pool_pre_ping=True)
