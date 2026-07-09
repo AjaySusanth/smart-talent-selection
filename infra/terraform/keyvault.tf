@@ -103,3 +103,15 @@ resource "azurerm_key_vault_secret" "openai_api_key" {
   value        = var.openai_api_key
   key_vault_id = azurerm_key_vault.kv.id
 }
+
+resource "azurerm_key_vault_secret" "azure_openai_endpoint" {
+  name         = "azure-openai-endpoint"
+  value        = var.azure_openai_endpoint
+  key_vault_id = azurerm_key_vault.kv.id
+}
+
+resource "azurerm_key_vault_secret" "azure_openai_key" {
+  name         = "azure-openai-key"
+  value        = var.azure_openai_key
+  key_vault_id = azurerm_key_vault.kv.id
+}

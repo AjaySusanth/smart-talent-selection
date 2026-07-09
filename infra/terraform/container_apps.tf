@@ -104,7 +104,21 @@ resource "azurerm_container_app" "api" {
     identity            = azurerm_user_assigned_identity.aca_identity.id
   }
 
+  secret {
+    name                = "azure-openai-endpoint"
+    key_vault_secret_id = azurerm_key_vault_secret.azure_openai_endpoint.id
+    identity            = azurerm_user_assigned_identity.aca_identity.id
+  }
+
+  secret {
+    name                = "azure-openai-key"
+    key_vault_secret_id = azurerm_key_vault_secret.azure_openai_key.id
+    identity            = azurerm_user_assigned_identity.aca_identity.id
+  }
+
   template {
+    min_replicas = 1
+    max_replicas = 2
     container {
       name    = "api"
       image   = "${azurerm_container_registry.acr.login_server}/backend:latest"
@@ -181,6 +195,16 @@ resource "azurerm_container_app" "api" {
       env {
         name        = "OPENAI_API_KEY"
         secret_name = "openai-api-key"
+      }
+
+      env {
+        name        = "AZURE_OPENAI_ENDPOINT"
+        secret_name = "azure-openai-endpoint"
+      }
+
+      env {
+        name        = "AZURE_OPENAI_KEY"
+        secret_name = "azure-openai-key"
       }
     }
   }
@@ -281,7 +305,21 @@ resource "azurerm_container_app" "worker" {
     identity            = azurerm_user_assigned_identity.aca_identity.id
   }
 
+  secret {
+    name                = "azure-openai-endpoint"
+    key_vault_secret_id = azurerm_key_vault_secret.azure_openai_endpoint.id
+    identity            = azurerm_user_assigned_identity.aca_identity.id
+  }
+
+  secret {
+    name                = "azure-openai-key"
+    key_vault_secret_id = azurerm_key_vault_secret.azure_openai_key.id
+    identity            = azurerm_user_assigned_identity.aca_identity.id
+  }
+
   template {
+    min_replicas = 1
+    max_replicas = 2
     container {
       name    = "worker"
       image   = "${azurerm_container_registry.acr.login_server}/backend:latest"
@@ -358,6 +396,16 @@ resource "azurerm_container_app" "worker" {
       env {
         name        = "OPENAI_API_KEY"
         secret_name = "openai-api-key"
+      }
+
+      env {
+        name        = "AZURE_OPENAI_ENDPOINT"
+        secret_name = "azure-openai-endpoint"
+      }
+
+      env {
+        name        = "AZURE_OPENAI_KEY"
+        secret_name = "azure-openai-key"
       }
     }
   }
