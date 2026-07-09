@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     api_key: str
     log_level: str = "INFO"
+    version: str = "unknown"
 
     database_url: str
     redis_url: str
