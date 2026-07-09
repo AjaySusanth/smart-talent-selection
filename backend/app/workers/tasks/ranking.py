@@ -27,7 +27,11 @@ logger = structlog.get_logger(__name__)
 
 _CACHE_TTL_SECONDS = 7 * 24 * 60 * 60  # 7 days
 
-_redis_client = redis.from_url(settings.redis_url, decode_responses=True)
+_redis_url = settings.redis_url
+if "ssl_cert_reqs=CERT_NONE" in _redis_url:
+    _redis_url = _redis_url.replace("ssl_cert_reqs=CERT_NONE", "ssl_cert_reqs=none")
+
+_redis_client = redis.from_url(_redis_url, decode_responses=True)
 
 
 def _skill_list(profile: dict) -> list[str]:
